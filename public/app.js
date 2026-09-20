@@ -39,6 +39,9 @@ const refLabel = (p) => `Page ${p.page}, ¶${p.id.split('.')[1]}${p.clause ? ` (
 const pid = (id) => 'p-' + id.replace('.', '_');
 
 // ------------------------------------------------------------------ shell
+const logoMark = () => { let l = ''; for (let i = 0; i < 24; i++) { const a = -Math.PI / 2 + (i / 24) * Math.PI * 2, f = (v) => v.toFixed(2);
+  l += `<line x1="${f(26 + Math.cos(a) * 10.4)}" y1="${f(26 + Math.sin(a) * 10.4)}" x2="${f(26 + Math.cos(a) * 22.6)}" y2="${f(26 + Math.sin(a) * 22.6)}"/>`; }
+  return `<svg viewBox="0 0 52 52" aria-hidden="true"><g stroke="#f4f4f4" stroke-width="1.4" stroke-linecap="round">${l}</g><circle cx="26" cy="26" r="7.4" fill="#fbfbfb"/></svg>`; };
 const initials = (n) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 function renderTop() {
   const s = state.session; if (!s) return;
@@ -46,7 +49,7 @@ function renderTop() {
   const hash = location.hash || '#/';
   const act = (p) => (hash === p || (p !== '#/' && hash.startsWith(p)) ? 'active' : '');
   $('#top').innerHTML = `
-    <a class="brand" href="#/"><span class="logo">⌕</span>ContractLens</a>
+    <a class="brand" href="#/">${logoMark()}ContractLens</a>
     <nav aria-label="Main">
       <a href="#/" class="${hash === '#/' || hash === '' ? 'active' : ''}">Dashboard</a>
       <a href="#/contracts" class="${act('#/contracts')}${hash.startsWith('#/contract/') ? ' active' : ''}">Contracts</a>
@@ -109,7 +112,7 @@ async function route() {
 
 
 // ------------------------------------------------------------------ public area: landing, sign in, sign up
-const publicTop = (right) => { $('#top').innerHTML = `<a class="brand" href="#/"><span class="logo">⌕</span>ContractLens</a><span class="spacer"></span>${right}`; };
+const publicTop = (right) => { $('#top').innerHTML = `<a class="brand" href="#/">${logoMark()}ContractLens</a><span class="spacer"></span>${right}`; };
 
 function pageLanding() {
   document.body.classList.add('landing');
@@ -128,7 +131,7 @@ function pageLanding() {
   <div class="lp">
     <section class="s1" id="home"><div class="page">
       <header class="topbar">
-        <a class="lp-logo" href="#/" aria-label="Home" data-enter><svg viewBox="0 0 52 52" aria-hidden="true"><g class="rays" stroke="#f4f4f4" stroke-width="1.4" stroke-linecap="round"></g><circle cx="26" cy="26" r="7.4" fill="#fbfbfb"/></svg></a>
+        <a class="lp-logo" href="#/" aria-label="Home" data-enter>${logoMark()}</a>
         <ul class="nav-links">${links.map(([id, t]) => `<li data-enter><a href="#/" data-scroll="${id}">${t}</a></li>`).join('')}</ul>
         <div class="nav-right"><a class="nav-signin" href="#/signin" data-enter>Sign in</a><a class="pill-cta" href="#/signup" data-enter>Get started</a>
           <button class="burger" id="burger" aria-label="Menu" aria-expanded="false" aria-controls="navOverlay" data-enter><i></i><i></i><i></i></button></div>
@@ -172,10 +175,6 @@ function pageLanding() {
 
 function initLanding() {
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches, root = document.documentElement, D = innerWidth <= 680 ? 0.7 : 1;
-  // logo rays: 24 radial lines
-  const rays = $('.rays'), NS = 'http://www.w3.org/2000/svg';
-  for (let i = 0; i < 24; i++) { const a = -Math.PI / 2 + (i / 24) * Math.PI * 2, l = document.createElementNS(NS, 'line');
-    l.setAttribute('x1', 26 + Math.cos(a) * 10.4); l.setAttribute('y1', 26 + Math.sin(a) * 10.4); l.setAttribute('x2', 26 + Math.cos(a) * 22.6); l.setAttribute('y2', 26 + Math.sin(a) * 22.6); rays.appendChild(l); }
   // smooth-scroll links + mobile overlay
   const ov = $('#navOverlay'), burger = $('#burger');
   const setMenu = (open) => { ov.hidden = false; requestAnimationFrame(() => ov.classList.toggle('open', open)); burger.setAttribute('aria-expanded', open); document.body.classList.toggle('menu-open', open); if (!open) setTimeout(() => { if (!ov.classList.contains('open')) ov.hidden = true; }, 360); };
@@ -190,9 +189,12 @@ function initLanding() {
   const REVEAL = 'cubic-bezier(0.16, 1, 0.3, 1)', LIFT = 'cubic-bezier(0.22, 1, 0.36, 1)';
   root.classList.add('entrance', 'entrance-s2');
   setTimeout(() => root.classList.remove('entrance'), 3500);
-  const anims = [];
+  setTimeout(() => { if (root.classList.contains('entrance-s2') && !document.getElementById('panel')?.getAnimations().length) { const r = document.getElementById('panel')?.getBoundingClientRect(); if (r && r.top < innerHeight) root.classList.remove('entrance-s2'); } }, 6000); // failsafe
+  const anims = []; // hero animations only; later sections clean up after themselves
   const A = (el, kf, o) => { if (!el) return; const an = el.animate(kf, { fill: 'both', ...o }); anims.push(an); return an; };
-  const lift = (els, y, delay, dur, stagger = 0) => [].concat(els).forEach((el, i) => A(el, [{ opacity: 0, transform: `translateY(${y}px)` }, { opacity: 1, transform: 'none' }], { duration: dur * 1000, delay: (delay + i * stagger) * 1000, easing: LIFT }));
+  // Later sections: when an animation finishes, drop its inline start state and cancel it (the natural CSS is the end state).
+  const A2 = (el, kf, o) => { if (!el) return; const an = el.animate(kf, { fill: 'both', ...o }); an.finished.then(() => { el.style.opacity = ''; an.cancel(); }).catch(() => {}); return an; };
+  const lift = (els, y, delay, dur, stagger = 0, fn = A) => [].concat(els).forEach((el, i) => fn(el, [{ opacity: 0, transform: `translateY(${y}px)` }, { opacity: 1, transform: 'none' }], { duration: dur * 1000, delay: (delay + i * stagger) * 1000, easing: LIFT }));
   const q = (s) => [...document.querySelectorAll(s)];
   const mask = (lines, base) => lines.forEach((el, i) => A(el, [{ opacity: 0, transform: 'translateY(108%)' }, { opacity: 1, transform: 'translateY(0)', offset: 0.14 }, { opacity: 1, transform: 'translateY(0)' }], { duration: 950, delay: base + i * 90, easing: REVEAL }));
   const play = () => {
@@ -205,18 +207,18 @@ function initLanding() {
     lift(q('.ph'), 10, 0.78, 0.55); lift(q('.controls > *:not(.grow)'), 10, 0.84, 0.5, 0.055);
     A($('.composer-glow'), [{ clipPath: 'inset(0 40% 0 40%)', opacity: 0 }, { clipPath: 'inset(0 0% 0 0%)', opacity: 0.95 }], { duration: 800, delay: 940, easing: REVEAL });
     lift(q('.proto'), 12, 1.08, 0.6);
-    setTimeout(() => { anims.forEach((a) => { try { a.commitStyles?.(); a.cancel(); } catch { /* ignore */ } }); root.classList.remove('entrance'); root.classList.add('hero-ready'); }, 2000);
+    setTimeout(() => { anims.forEach((a) => { try { a.cancel(); } catch { /* ignore */ } }); root.classList.remove('entrance'); root.classList.add('hero-ready'); }, 2000);
   };
   (document.fonts?.ready ? Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 400))]) : Promise.resolve()).then(play);
 
   // section 2 + later sections: once, when scrolled into view
   const io = new IntersectionObserver((ents) => { if (!ents.some((e) => e.isIntersecting)) return; io.disconnect();
-    A($('#panel'), [{ opacity: 0, transform: `translateY(${26 * D}px) scale(.985)` }, { opacity: 1, transform: 'none' }], { duration: 1000, delay: 0, easing: REVEAL });
-    lift(q('.fcard'), 10, 0.3, 0.6, 0.065);
-    setTimeout(() => { root.classList.remove('entrance-s2'); }, 2200);
+    A2($('#panel'), [{ opacity: 0, transform: `translateY(${26 * D}px) scale(.985)` }, { opacity: 1, transform: 'none' }], { duration: 1000, delay: 0, easing: REVEAL });
+    lift(q('.fcard'), 10, 0.3, 0.6, 0.065, A2);
+    root.classList.remove('entrance-s2'); // fill:both keeps the start state through each delay
   }, { rootMargin: '0px 0px -20% 0px', threshold: 0 });
   io.observe($('#panel'));
-  const io2 = new IntersectionObserver((ents) => ents.forEach((e) => { if (e.isIntersecting) { io2.unobserve(e.target); A(e.target, [{ opacity: 0, transform: 'translateY(18px)' }, { opacity: 1, transform: 'none' }], { duration: 700, easing: LIFT }); } }), { rootMargin: '0px 0px -10% 0px' });
+  const io2 = new IntersectionObserver((ents) => ents.forEach((e) => { if (e.isIntersecting) { io2.unobserve(e.target); A2(e.target, [{ opacity: 0, transform: 'translateY(18px)' }, { opacity: 1, transform: 'none' }], { duration: 700, easing: LIFT }); } }), { rootMargin: '0px 0px -10% 0px' });
   q('.s3 .lp-h2, .s3 .lcard').forEach((el) => { el.style.opacity = 0; io2.observe(el); });
 }
 
