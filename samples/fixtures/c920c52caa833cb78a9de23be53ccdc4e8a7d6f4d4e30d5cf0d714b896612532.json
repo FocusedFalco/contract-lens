@@ -1,0 +1,111 @@
+{
+  "file": "spcb-consent-to-operate.pdf",
+  "title": "SPCB Consent to Operate – Pune Unit",
+  "contract_type": "regulatory_class",
+  "vendor_name": "State Pollution Control Board",
+  "doc_quality": "Clean digital PDF. Schedule II (fee schedule) referenced but not included.",
+  "fields": {
+    "parties": {
+      "value": [
+        {
+          "name": "State Pollution Control Board",
+          "role": "Issuing authority"
+        },
+        {
+          "name": "Acme Traders Pvt Ltd",
+          "role": "Occupier"
+        }
+      ],
+      "confidence": "high",
+      "refs": [
+        "P1.3"
+      ],
+      "rationale": "Issuer and Occupier stated in the grant paragraph."
+    },
+    "effective_date": {
+      "value": "2021-10-17",
+      "confidence": "high",
+      "refs": [
+        "P1.3"
+      ],
+      "rationale": "Date of grant stated."
+    },
+    "expiration_date": {
+      "value": "2026-10-17",
+      "confidence": "medium",
+      "refs": [
+        "P1.5"
+      ],
+      "rationale": "Not stated as a date; computed as date of grant + 5 years."
+    },
+    "renewal_terms": {
+      "value": "Not automatic. Renewal application must be filed at least 120 days before expiry and is at the Board's sole discretion.",
+      "confidence": "high",
+      "refs": [
+        "P1.6"
+      ],
+      "rationale": "Explicit renewal clause."
+    },
+    "payment_terms": {
+      "value": {
+        "amount": null,
+        "currency": null,
+        "recurrence": "annual",
+        "due_rule": "Annual consent fee per Schedule II, due by the last day of the first month of each consent year."
+      },
+      "confidence": "low",
+      "refs": [
+        "P1.10"
+      ],
+      "rationale": "Amount lives in Schedule II, which is not part of this document."
+    },
+    "termination_conditions": {
+      "value": "The Board may suspend, modify or revoke the consent at any time without prior notice for non-compliance or in the public interest.",
+      "confidence": "high",
+      "refs": [
+        "P2.2"
+      ],
+      "rationale": "Explicit clause."
+    },
+    "service_obligations": {
+      "value": [
+        "Keep particulate emissions at or below 150 mg/Nm3 at any stack",
+        "Maintain an online emission monitoring system",
+        "Submit a compliance report every 6 months",
+        "Display the consent at the premises entrance; not transferable",
+        "Allow Board officers to inspect at any reasonable time"
+      ],
+      "confidence": "high",
+      "refs": [
+        "P1.8",
+        "P1.9",
+        "P1.11",
+        "P2.4"
+      ],
+      "rationale": "Listed in the conditions."
+    }
+  },
+  "flags": [
+    {
+      "flag_type": "unilateral_termination",
+      "description": "The Board can suspend or revoke the consent at any time, without notice, including on a broad \"public interest\" ground.",
+      "source_ref": "P2.2"
+    },
+    {
+      "flag_type": "penalty",
+      "description": "Environmental compensation of up to INR 100,000 per day of continuing non-compliance.",
+      "source_ref": "P2.3"
+    },
+    {
+      "flag_type": "other",
+      "description": "Renewal is not automatic and the application deadline is 120 days before expiry; check whether that deadline has already passed.",
+      "source_ref": "P1.6"
+    },
+    {
+      "flag_type": "other",
+      "description": "The fee amount is in Schedule II, which is not attached, so the payment obligation cannot be fully verified from this document.",
+      "source_ref": "P1.10"
+    }
+  ],
+  "summary": "This is the State Pollution Control Board's permission for Acme Traders to run its Pune warehousing and packaging unit. It lasts five years from the date it was granted and does not renew automatically: you must apply at least 120 days before it ends and the Board decides. You must keep dust emissions under the stated limit, run a monitoring system, send the Board a report every six months, and pay an annual fee. The amount of that fee is in a Schedule II that is not included, so it is unknown here. The Board can cancel or suspend the permission at any time without warning, and continuing breaches can cost up to INR 100,000 a day."
+}

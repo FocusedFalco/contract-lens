@@ -1,0 +1,92 @@
+{
+  "file": "nimbus-hosting-order-form-2024.pdf",
+  "title": "Nimbus Hosting Order Form (2024)",
+  "contract_type": "business_class",
+  "vendor_name": "Nimbus Cloud Solutions Private Limited",
+  "doc_quality": "Clean digital PDF, fully legible.",
+  "fields": {
+    "parties": {
+      "value": [
+        {
+          "name": "Nimbus Cloud Solutions Private Limited",
+          "role": "Provider"
+        },
+        {
+          "name": "Acme Traders Pvt Ltd",
+          "role": "Client"
+        }
+      ],
+      "confidence": "high",
+      "refs": [
+        "P1.2"
+      ],
+      "rationale": "Named in the preamble."
+    },
+    "effective_date": {
+      "value": "2024-07-12",
+      "confidence": "high",
+      "refs": [
+        "P1.3"
+      ],
+      "rationale": "Start date stated."
+    },
+    "expiration_date": {
+      "value": "2025-07-12",
+      "confidence": "high",
+      "refs": [
+        "P1.3"
+      ],
+      "rationale": "End date stated."
+    },
+    "renewal_terms": {
+      "value": "Renews automatically for another year unless the Client gives 60 days' written notice of non-renewal.",
+      "confidence": "high",
+      "refs": [
+        "P1.5"
+      ],
+      "rationale": "Explicit."
+    },
+    "payment_terms": {
+      "value": {
+        "amount": 900,
+        "currency": "USD",
+        "recurrence": "quarterly",
+        "due_rule": "Payable within 30 days of invoice."
+      },
+      "confidence": "high",
+      "refs": [
+        "P1.4"
+      ],
+      "rationale": "Explicit."
+    },
+    "termination_conditions": {
+      "value": "Either party may terminate on 90 days' written notice.",
+      "confidence": "high",
+      "refs": [
+        "P1.6"
+      ],
+      "rationale": "Explicit."
+    },
+    "service_obligations": {
+      "value": [
+        "Managed cloud hosting for the web storefront",
+        "99.0% monthly uptime",
+        "Daily backups"
+      ],
+      "confidence": "high",
+      "refs": [
+        "P1.3",
+        "P1.7"
+      ],
+      "rationale": "Explicit."
+    }
+  },
+  "flags": [
+    {
+      "flag_type": "auto_renewal",
+      "description": "Renews automatically for a further year unless 60 days' notice is given.",
+      "source_ref": "P1.5"
+    }
+  ],
+  "summary": "This is a hosting arrangement where Nimbus ran the Acme storefront on its cloud for about a year at USD 900 a quarter. It renews itself for another year unless Acme gives 60 days' notice, and either side can walk away with 90 days' notice. Nimbus promised 99% uptime and daily backups."
+}

@@ -1,0 +1,113 @@
+{
+  "file": "sunrise-apartment-lease.pdf",
+  "title": "Flat 4B Lakeview Residency – Lease",
+  "contract_type": "business_class",
+  "vendor_name": "Sunrise Properties LLP",
+  "doc_quality": "Clean digital PDF, fully legible.",
+  "fields": {
+    "parties": {
+      "value": [
+        {
+          "name": "Sunrise Properties LLP",
+          "role": "Landlord"
+        },
+        {
+          "name": "Aarav Mehta",
+          "role": "Tenant"
+        }
+      ],
+      "confidence": "high",
+      "refs": [
+        "P1.2"
+      ],
+      "rationale": "Named in the preamble."
+    },
+    "effective_date": {
+      "value": "2025-12-12",
+      "confidence": "high",
+      "refs": [
+        "P1.4"
+      ],
+      "rationale": "Lease start date stated in clause 1.1."
+    },
+    "expiration_date": {
+      "value": "2026-11-11",
+      "confidence": "high",
+      "refs": [
+        "P1.4"
+      ],
+      "rationale": "Expiry date stated explicitly in clause 1.1."
+    },
+    "renewal_terms": {
+      "value": "Renews automatically for another 11 months at 10% higher rent unless either party gives written notice at least 30 days before expiry.",
+      "confidence": "high",
+      "refs": [
+        "P1.9"
+      ],
+      "rationale": "Explicit renewal clause."
+    },
+    "payment_terms": {
+      "value": {
+        "amount": 32000,
+        "currency": "INR",
+        "recurrence": "monthly",
+        "due_rule": "Due on or before the 5th of each month; INR 500/day late fee. Plus INR 3,500 monthly society maintenance."
+      },
+      "confidence": "high",
+      "refs": [
+        "P1.5",
+        "P1.7",
+        "P2.7"
+      ],
+      "rationale": "Rent amount and due day stated."
+    },
+    "termination_conditions": {
+      "value": "Landlord may terminate on 30 days' notice for any reason. Tenant must give 60 days' notice and forfeits the whole INR 96,000 deposit if leaving before the term ends.",
+      "confidence": "high",
+      "refs": [
+        "P2.2",
+        "P2.3"
+      ],
+      "rationale": "Explicit termination clauses."
+    },
+    "service_obligations": {
+      "value": [
+        "Landlord: return the security deposit within 30 days of vacating, less damage deductions",
+        "Tenant: residential use only, no subletting",
+        "Tenant: pay utilities directly and minor repairs up to INR 2,000 per incident",
+        "Tenant: pay INR 3,500 monthly society maintenance"
+      ],
+      "confidence": "medium",
+      "refs": [
+        "P2.5",
+        "P2.6",
+        "P2.7",
+        "P2.8"
+      ],
+      "rationale": "Obligations are spread across several clauses; list may not be exhaustive."
+    }
+  },
+  "flags": [
+    {
+      "flag_type": "auto_renewal",
+      "description": "Lease renews automatically for 11 more months with a 10% rent increase unless you give notice 30+ days before expiry.",
+      "source_ref": "P1.9"
+    },
+    {
+      "flag_type": "unilateral_termination",
+      "description": "Landlord may end the lease on 30 days' notice for any reason, while you must give 60 days.",
+      "source_ref": "P2.2"
+    },
+    {
+      "flag_type": "penalty",
+      "description": "Leaving early forfeits the ENTIRE INR 96,000 deposit, however short the remaining term.",
+      "source_ref": "P2.3"
+    },
+    {
+      "flag_type": "penalty",
+      "description": "Late rent costs INR 500 per day, which adds up quickly.",
+      "source_ref": "P1.7"
+    }
+  ],
+  "summary": "This is an 11-month lease for Flat 4B at Lakeview Residency. You pay INR 32,000 rent by the 5th of each month, plus INR 3,500 society maintenance and your own utilities, and you have put down a INR 96,000 deposit. The lease renews itself for another 11 months at 10% higher rent unless you or the landlord give written notice at least 30 days before it ends. The landlord can end it with 30 days' notice for any reason, but you need to give 60 days' notice, and if you leave early you lose the whole deposit. Late rent costs INR 500 a day."
+}

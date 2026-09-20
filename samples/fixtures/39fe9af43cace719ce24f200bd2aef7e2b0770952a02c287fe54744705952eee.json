@@ -1,0 +1,129 @@
+{
+  "file": "nimbus-master-services-agreement.pdf",
+  "title": "Nimbus Cloud – Master Services Agreement",
+  "contract_type": "business_class",
+  "vendor_name": "Nimbus Cloud Solutions Pvt Ltd",
+  "doc_quality": "Clean digital PDF, fully legible.",
+  "fields": {
+    "parties": {
+      "value": [
+        {
+          "name": "Nimbus Cloud Solutions Pvt Ltd",
+          "role": "Provider"
+        },
+        {
+          "name": "Acme Traders Pvt Ltd",
+          "role": "Customer"
+        }
+      ],
+      "confidence": "high",
+      "refs": [
+        "P1.2"
+      ],
+      "rationale": "Both parties named in the preamble."
+    },
+    "effective_date": {
+      "value": "2025-10-10",
+      "confidence": "high",
+      "refs": [
+        "P1.2"
+      ],
+      "rationale": "Stated as the Effective Date."
+    },
+    "expiration_date": {
+      "value": "2026-10-10",
+      "confidence": "medium",
+      "refs": [
+        "P2.2"
+      ],
+      "rationale": "Not stated as a date; computed as Effective Date + 12-month Initial Term."
+    },
+    "renewal_terms": {
+      "value": "Renews automatically for successive 12-month terms unless either party gives written non-renewal notice at least 60 days before the end of the current term. Provider may raise fees by up to 20% on renewal with 30 days' notice.",
+      "confidence": "high",
+      "refs": [
+        "P2.3",
+        "P2.4"
+      ],
+      "rationale": "Explicit renewal clause."
+    },
+    "payment_terms": {
+      "value": {
+        "amount": 4500,
+        "currency": "USD",
+        "recurrence": "monthly",
+        "due_rule": "Invoiced monthly in advance; payable within 15 days of invoice date."
+      },
+      "confidence": "high",
+      "refs": [
+        "P2.6",
+        "P2.7"
+      ],
+      "rationale": "Fee, cadence and due rule all stated."
+    },
+    "termination_conditions": {
+      "value": "Provider may terminate at any time for any reason on 15 days' notice. Customer may terminate only for Provider's uncured material breach (60-day cure) and must pay all remaining fees on early termination.",
+      "confidence": "high",
+      "refs": [
+        "P3.2",
+        "P3.3",
+        "P3.4"
+      ],
+      "rationale": "Explicit termination clauses."
+    },
+    "service_obligations": {
+      "value": [
+        "Provide the cloud inventory and billing platform (Schedule A services)",
+        "99.5% monthly platform availability",
+        "Email/phone support 9:00–18:00 IST Mon–Fri; critical incidents answered within 4 hours",
+        "Daily backups retained for 30 days"
+      ],
+      "confidence": "high",
+      "refs": [
+        "P1.4",
+        "P1.5",
+        "P1.6",
+        "P1.7"
+      ],
+      "rationale": "Listed in Article 1."
+    }
+  },
+  "flags": [
+    {
+      "flag_type": "auto_renewal",
+      "description": "Auto-renews for 12 months unless notice is given 60 days before term end. Check whether that notice deadline has already passed relative to the expiry date.",
+      "source_ref": "P2.3"
+    },
+    {
+      "flag_type": "other",
+      "description": "Provider can raise fees by up to 20% on each renewal with only 30 days' notice.",
+      "source_ref": "P2.4"
+    },
+    {
+      "flag_type": "penalty",
+      "description": "Late payments carry 3% per month interest PLUS a fixed USD 250 penalty per late invoice.",
+      "source_ref": "P2.8"
+    },
+    {
+      "flag_type": "other",
+      "description": "Provider may suspend service immediately, with no notice, after only 7 days of non-payment.",
+      "source_ref": "P2.9"
+    },
+    {
+      "flag_type": "unilateral_termination",
+      "description": "Provider may terminate at any time for any reason on 15 days' notice; Customer has no equivalent right.",
+      "source_ref": "P3.2"
+    },
+    {
+      "flag_type": "penalty",
+      "description": "If Customer terminates early it must pay ALL remaining fees for the term as liquidated damages, and Customer can only terminate for cause.",
+      "source_ref": "P3.4"
+    },
+    {
+      "flag_type": "indemnity",
+      "description": "Customer gives an uncapped one-way indemnity, while Provider's own liability is capped at one month of fees.",
+      "source_ref": "P3.6"
+    }
+  ],
+  "summary": "This is a one-year subscription to Nimbus Cloud's inventory and billing software at USD 4,500 a month, paid within 15 days of each invoice. It renews itself for another year unless you tell Nimbus in writing at least 60 days before the year ends, and Nimbus may raise the price by up to 20% when it does. Nimbus can end the deal at any time with 15 days' notice, but you can only leave if Nimbus seriously breaks the contract, and leaving early means paying for the rest of the term. Late payments are charged heavily (3% a month plus USD 250 per invoice) and Nimbus can cut off service after just 7 days unpaid. You also promise to cover Nimbus for any claims from your use of the software with no cap, while Nimbus's own liability is limited to about one month of fees. Several of these terms favour Nimbus heavily and are worth a careful look before renewal."
+}
