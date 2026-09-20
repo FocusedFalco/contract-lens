@@ -1,4 +1,4 @@
-// End-to-end API smoke test. Run against a server started with a FRESH data dir, e.g.:
+// End-to-end API smoke test (no accounts: one open workspace). Run against a server started with a FRESH data dir, e.g.:
 //   CL_DATA_DIR=/tmp/cl-test PORT=3299 npm start &   then   BASE=http://localhost:3299 npm test
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,27 +9,18 @@ const S = (f) => path.join('samples', f);
 let passed = 0;
 const step = async (name, fn) => { try { await fn(); passed++; console.log(`  ✓ ${name}`); } catch (e) { console.error(`  ✗ ${name}\n    ${e.message}`); process.exitCode = 1; } };
 
-// uid 1 = individual, 2 = business (creates org), 3 = business teammate (joins via invite code). Real accounts, bearer tokens.
-const tokens = {};
-async function api(method, url, { uid = 2, body, form, noAuth } = {}) {
-  const res = await fetch(BASE + '/api' + url, {
-    method, headers: { ...(noAuth || !tokens[uid] ? {} : { authorization: `Bearer ${tokens[uid]}` }), ...(body ? { 'content-type': 'application/json' } : {}) },
-    body: form ?? (body ? JSON.stringify(body) : undefined),
-  });
-  const data = await res.json().catch(() => null);
-  const cookie = res.headers.get('set-cookie');
-  return { status: res.status, data, token: cookie && /cl_session=([^;]+)/.exec(cookie)?.[1] };
+async function api(method, url, { body, form } = {}) {
+  const res = await fetch(BASE + '/api' + url, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: form ?? (body ? JSON.stringify(body) : undefined) });
+  return { status: res.status, data: await res.json().catch(() => null) };
 }
-const P = { password: 'correct-horse-9', phone: '+91 98765 43210', country: 'India' };
-async function signup(uid, extra) { const r = await api('POST', '/auth/signup', { noAuth: true, body: { ...P, ...extra } }); if (r.token) tokens[uid] = r.token; return r; }
-async function upload(file, uid = 2, q = '') {
+async function upload(file, _uid, q = '') {
   const form = new FormData();
   form.append('file', new Blob([fs.readFileSync(S(file))], { type: 'application/pdf' }), file);
-  return api('POST', `/contracts${q}`, { uid, form });
+  return api('POST', `/contracts${q}`, { form });
 }
-async function ready(id, uid = 2) {
+async function ready(id) {
   for (let i = 0; i < 60; i++) {
-    const { data } = await api('GET', `/contracts/${id}`, { uid });
+    const { data } = await api('GET', `/contracts/${id}`);
     if (!['processing'].includes(data.contract.status)) return data;
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -43,42 +34,6 @@ const confirmBody = (d, vendorName, extra = {}) => ({ title: d.contract.title, c
 
 console.log(`ContractLens smoke test → ${BASE}`);
 const ids = {};
-
-await step('AUTH: unauthenticated requests are rejected', async () => {
-  assert.equal((await api('GET', '/contracts', { noAuth: true })).status, 401);
-  assert.equal((await api('GET', '/session', { noAuth: true })).status, 401);
-});
-await step('AUTH: sign-up validates input and stores personal details', async () => {
-  assert.equal((await signup(9, { email: 'bad', name: 'A B', account_type: 'customer' })).status, 422);
-  assert.equal((await signup(9, { email: 'x@y.com', password: 'short', name: 'A B', account_type: 'customer' })).status, 422);
-  assert.equal((await signup(9, { email: 'x@y.com', name: 'A', account_type: 'customer' })).status, 422, 'name too short');
-  assert.equal((await signup(9, { email: 'x@y.com', name: 'A B', account_type: 'nope' })).status, 422);
-  assert.equal((await signup(9, { email: 'x@y.com', name: 'A B', account_type: 'business', org: { mode: 'create', name: '' } })).status, 422, 'org name required');
-  assert.equal((await signup(9, { email: 'x@y.com', name: 'A B', account_type: 'business', org: { mode: 'join', code: 'NOPE1234' } })).status, 422, 'bad invite code');
-  const r = await signup(1, { email: 'Aarav@Example.com', name: 'Aarav Mehta', job_title: 'Engineer', account_type: 'customer' });
-  assert.equal(r.status, 201); assert.ok(r.token);
-  const me = (await api('GET', '/session', { uid: 1 })).data;
-  assert.equal(me.user.email, 'aarav@example.com', 'email normalised'); assert.equal(me.user.phone, P.phone); assert.equal(me.user.country, 'India'); assert.equal(me.user.job_title, 'Engineer'); assert.equal(me.user.account_type, 'customer');
-  assert.ok(!('password_hash' in me.user) && !JSON.stringify(me).includes('scrypt'), 'no password hash leaked');
-});
-await step('AUTH: duplicate email rejected; wrong password rejected; sign-in works; sign-out revokes the session', async () => {
-  assert.equal((await signup(9, { email: 'AARAV@example.com', name: 'Dup Licate', account_type: 'customer' })).status, 409);
-  assert.equal((await api('POST', '/auth/signin', { noAuth: true, body: { email: 'aarav@example.com', password: 'wrong-password' } })).status, 401);
-  assert.equal((await api('POST', '/auth/signin', { noAuth: true, body: { email: 'nobody@example.com', password: 'whatever123' } })).status, 401);
-  const ok = await api('POST', '/auth/signin', { noAuth: true, body: { email: 'aarav@example.com', password: P.password } });
-  assert.equal(ok.status, 200); tokens.tmp = ok.token;
-  assert.equal((await api('GET', '/session', { uid: 'tmp' })).status, 200);
-  await api('POST', '/auth/signout', { uid: 'tmp' });
-  assert.equal((await api('GET', '/session', { uid: 'tmp' })).status, 401, 'token revoked');
-});
-await step('BUSINESS: create org, teammate joins with invite code, both have identical full access', async () => {
-  assert.equal((await signup(2, { email: 'priya@acme.example', name: 'Priya Nair', account_type: 'business', org: { mode: 'create', name: 'Acme Traders Pvt Ltd', industry: 'Retail & e-commerce' } })).status, 201);
-  const org = (await api('GET', '/org', { uid: 2 })).data;
-  assert.equal(org.name, 'Acme Traders Pvt Ltd'); assert.match(org.invite_code, /^[A-Z2-9]{8}$/);
-  assert.equal((await signup(3, { email: 'karan@acme.example', name: 'Karan Shah', account_type: 'business', org: { mode: 'join', code: org.invite_code.toLowerCase() } })).status, 201);
-  assert.equal((await api('GET', '/org', { uid: 3 })).data.members.length, 2);
-  assert.equal((await api('GET', '/org', { uid: 1 })).data, null, 'individuals have no org');
-});
 
 await step('upload + extraction produce fields (low confidence first), flags, paragraphs, summary', async () => {
   const r = await upload('nimbus-master-services-agreement.pdf');
@@ -148,32 +103,14 @@ await step('vendor entity resolution: "create new" keeps them separate', async (
   assert.equal((await api('GET', '/vendors')).data.length, 2);
 });
 
-await step('automatic vendor chain (customer): near-identical name auto-links without a prompt', async () => {
-  await api('PUT', '/settings', { uid: 1, body: { vendor_mode: 'automatic' } });
-  const a = await upload('sunrise-apartment-lease.pdf', 1); const da = await ready(a.data.id, 1);
-  const b = await upload('sunrise-apartment-lease.pdf', 1, '?allow_duplicate=1'); const db = await ready(b.data.id, 1);
-  assert.equal((await api('POST', `/contracts/${a.data.id}/confirm`, { uid: 1, body: confirmBody(da, 'Sunrise Properties LLP') })).status, 200);
-  const r = await api('POST', `/contracts/${b.data.id}/confirm`, { uid: 1, body: confirmBody(db, 'Sunrise Properties') });
+await step('automatic vendor chain: near-identical name auto-links without a prompt', async () => {
+  await api('PUT', '/settings', { body: { vendor_mode: 'automatic' } });
+  const a = await upload('sunrise-apartment-lease.pdf'); const da = await ready(a.data.id);
+  const b = await upload('sunrise-apartment-lease.pdf', 0, '?allow_duplicate=1'); const db = await ready(b.data.id);
+  assert.equal((await api('POST', `/contracts/${a.data.id}/confirm`, { body: confirmBody(da, 'Sunrise Properties LLP') })).status, 200);
+  const r = await api('POST', `/contracts/${b.data.id}/confirm`, { body: confirmBody(db, 'Sunrise Properties') });
   assert.equal(r.status, 200, JSON.stringify(r.data)); assert.ok(r.data.auto_merged, 'auto_merged reported');
-  assert.equal((await api('GET', '/vendors', { uid: 1 })).data.length, 1);
-});
-
-await step('tenancy: customer cannot see business contracts and vice versa', async () => {
-  assert.equal((await api('GET', `/contracts/${ids.msa}`, { uid: 1 })).status, 404);
-  assert.equal((await api('GET', '/contracts', { uid: 1 })).data.length, 2);
-});
-
-await step('teammate has FULL access to the same contracts: view, chat, upload, edit, delete', async () => {
-  assert.equal((await api('GET', `/contracts/${ids.msa}`, { uid: 3 })).status, 200);
-  assert.equal((await api('GET', '/contracts', { uid: 3 })).data.length, (await api('GET', '/contracts', { uid: 2 })).data.length);
-  const c = await api('POST', `/contracts/${ids.msa}/chat`, { uid: 3, body: { question: 'When does this expire?' } });
-  assert.equal(c.status, 200);
-  const up = await upload('sunrise-apartment-lease.pdf', 3); assert.equal(up.status, 202);
-  const d = await ready(up.data.id, 3);
-  assert.equal((await api('POST', `/contracts/${up.data.id}/confirm`, { uid: 3, body: confirmBody(d, 'Sunrise Properties LLP') })).status, 200, 'teammate can confirm');
-  assert.equal((await api('DELETE', `/contracts/${up.data.id}`, { uid: 3 })).status, 200, 'teammate can delete');
-  assert.equal((await api('GET', `/contracts/${up.data.id}`, { uid: 2 })).status, 404);
-  assert.equal((await api('GET', `/contracts/${ids.msa}`, { uid: 1 })).status, 404, 'individual cannot see the org');
+  assert.equal((await api('GET', '/vendors')).data.length, 3, 'Nimbus, SPCB, Sunrise: the second Sunrise was merged, not duplicated');
 });
 
 await step('chat: answers cite real paragraphs; confidence is explicit; unknown topics say so', async () => {
@@ -210,7 +147,7 @@ await step('regulatory-change demo (mock): maps seeded updates to regulatory_cla
 });
 
 await step('original file is served back', async () => {
-  const res = await fetch(`${BASE}/api/contracts/${ids.msa}/file`, { headers: { authorization: `Bearer ${tokens[2]}` } });
+  const res = await fetch(`${BASE}/api/contracts/${ids.msa}/file`);
   assert.equal(res.status, 200); assert.equal(res.headers.get('content-type'), 'application/pdf');
   assert.ok((await res.arrayBuffer()).byteLength > 1000);
 });

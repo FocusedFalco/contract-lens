@@ -10,7 +10,6 @@ async function api(method, url, body) {
   else if (body !== undefined) { opts.headers['content-type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const res = await fetch('/api' + url, opts);
   const data = await res.json().catch(() => null);
-  if (res.status === 401 && !url.startsWith('/auth/') && state.session) { state.session = null; toast('Your session expired. Please sign in again.', true); go('#/signin'); }
   if (!res.ok) throw Object.assign(new Error(data?.error || res.statusText), { status: res.status, data });
   return data;
 }
@@ -42,16 +41,15 @@ const pid = (id) => 'p-' + id.replace('.', '_');
 const logoMark = () => { let l = ''; for (let i = 0; i < 24; i++) { const a = -Math.PI / 2 + (i / 24) * Math.PI * 2, f = (v) => v.toFixed(2);
   l += `<line x1="${f(26 + Math.cos(a) * 10.4)}" y1="${f(26 + Math.sin(a) * 10.4)}" x2="${f(26 + Math.cos(a) * 22.6)}" y2="${f(26 + Math.sin(a) * 22.6)}"/>`; }
   return `<svg viewBox="0 0 52 52" aria-hidden="true"><g stroke="#f4f4f4" stroke-width="1.4" stroke-linecap="round">${l}</g><circle cx="26" cy="26" r="7.4" fill="#fbfbfb"/></svg>`; };
-const initials = (n) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
 function renderTop() {
   const s = state.session; if (!s) return;
   const unread = state.notifs.filter((n) => !n.read).length;
   const hash = location.hash || '#/';
   const act = (p) => (hash === p || (p !== '#/' && hash.startsWith(p)) ? 'active' : '');
   $('#top').innerHTML = `
-    <a class="brand" href="#/">${logoMark()}ContractLens</a>
+    <a class="brand" href="#/dashboard">${logoMark()}ContractLens</a>
     <nav aria-label="Main">
-      <a href="#/" class="${hash === '#/' || hash === '' ? 'active' : ''}">Dashboard</a>
+      <a href="#/dashboard" class="${hash === '#/dashboard' ? 'active' : ''}">Dashboard</a>
       <a href="#/contracts" class="${act('#/contracts')}${hash.startsWith('#/contract/') ? ' active' : ''}">Contracts</a>
       <a href="#/vendors" class="${act('#/vendor')}">Vendors</a>
       <a href="#/upload" class="${act('#/upload')}">Upload</a>
@@ -62,15 +60,7 @@ function renderTop() {
       <button class="icon" data-act="bell" aria-label="Notifications">🔔</button>${unread ? `<span class="count">${unread}</span>` : ''}
       <div class="pop hidden" id="bell-pop"></div>
     </div>
-    <div class="usermenu" style="position:relative">
-      <button class="icon row" data-act="user-menu" aria-label="Account menu"><span class="avatar">${esc(initials(s.user.name))}</span><span class="uname">${esc(s.user.name.split(' ')[0])}</span> ▾</button>
-      <div class="pop hidden" id="user-pop" style="width:280px">
-        <div style="padding:8px 10px"><strong>${esc(s.user.name)}</strong><div class="small muted">${esc(s.user.email)}</div>
-          <div style="margin-top:6px"><span class="badge accent">${s.user.account_type === 'business' ? 'Business · ' + esc(s.orgName) : 'Individual'}</span></div></div>
-        <button class="link item" style="width:100%;text-align:left;display:block" data-act="settings">⚙ Settings${s.user.account_type === 'business' ? ' &amp; team' : ''}</button>
-        <button class="link item" style="width:100%;text-align:left;display:block" data-act="signout">Sign out</button>
-      </div>
-    </div>`;
+    <button class="icon" data-act="settings" aria-label="Settings">⚙ Settings</button>`;
 }
 function renderBell() {
   const pop = $('#bell-pop'); if (!pop) return;
@@ -81,29 +71,22 @@ function renderBell() {
 async function refreshNotifs() { try { state.notifs = (await api('GET', '/dashboard')).notifications; renderTop(); } catch { /* ignore */ } }
 
 // ------------------------------------------------------------------ router
-function go(hash) { if (location.hash === hash || (hash === '#/' && !location.hash)) route(); else location.hash = hash; }
 async function route() {
   clearInterval(state.timer);
   closeModal();
   document.body.classList.remove('landing', 'menu-open'); document.documentElement.classList.remove('entrance', 'entrance-s2', 'hero-ready');
   const h = location.hash.replace(/^#/, '') || '/';
-  if (!state.session) { // public area: landing + auth
-    if (h === '/signin') return pageSignin();
-    if (h === '/signup') return pageSignup();
-    if (h !== '/') return go('#/');
-    return pageLanding();
-  }
-  if (h === '/signin' || h === '/signup') return go('#/');
+  if (h === '/') return pageLanding();
   renderTop();
   try {
     let m;
-    if (h === '/') await pageDashboard();
+    if (h === '/dashboard') await pageDashboard();
     else if (h === '/contracts') await pageContracts();
     else if (h === '/upload') await pageUpload();
     else if (h === '/vendors') await pageVendors();
     else if ((m = h.match(/^\/vendor\/(\d+)$/))) await pageVendor(m[1]);
     else if ((m = h.match(/^\/contract\/(\d+)$/))) await pageContract(m[1]);
-    else app.innerHTML = '<div class="empty">Page not found. <a href="#/">Go to dashboard</a></div>';
+    else app.innerHTML = '<div class="empty">Page not found. <a href="#/dashboard">Go to dashboard</a></div>';
   } catch (e) {
     app.innerHTML = `<div class="banner err">${esc(e.message)}</div>`;
   }
@@ -111,9 +94,7 @@ async function route() {
 }
 
 
-// ------------------------------------------------------------------ public area: landing, sign in, sign up
-const publicTop = (right) => { $('#top').innerHTML = `<a class="brand" href="#/">${logoMark()}ContractLens</a><span class="spacer"></span>${right}`; };
-
+// ------------------------------------------------------------------ landing
 function pageLanding() {
   document.body.classList.add('landing');
   $('#top').innerHTML = '';
@@ -133,7 +114,7 @@ function pageLanding() {
       <header class="topbar">
         <a class="lp-logo" href="#/" aria-label="Home" data-enter>${logoMark()}</a>
         <ul class="nav-links">${links.map(([id, t]) => `<li data-enter><a href="#/" data-scroll="${id}">${t}</a></li>`).join('')}</ul>
-        <div class="nav-right"><a class="nav-signin" href="#/signin" data-enter>Sign in</a><a class="pill-cta" href="#/signup" data-enter>Get started</a>
+        <div class="nav-right"><a class="pill-cta" href="#/dashboard" data-enter>Get started</a>
           <button class="burger" id="burger" aria-label="Menu" aria-expanded="false" aria-controls="navOverlay" data-enter><i></i><i></i><i></i></button></div>
       </header>
       <div class="hero">
@@ -143,12 +124,12 @@ function pageLanding() {
         <div class="composer-shell" data-enter><div class="composer"><div class="composer-glow"></div>
           <div class="ph" data-enter>Upload a contract to get started…</div>
           <div class="controls">
-            <a class="chip round" href="#/signup" aria-label="Add attachment" data-enter><svg viewBox="0 0 24 24" width="46%" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></a>
-            <a class="chip pillchip" href="#/signup" data-enter>Create your account</a>
-            <a class="chip pillchip" href="#/signin" data-enter>I already have one</a>
+            <a class="chip round" href="#/upload" aria-label="Add attachment" data-enter><svg viewBox="0 0 24 24" width="46%" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></a>
+            <a class="chip pillchip" href="#/dashboard" data-enter>Get started</a>
+            <a class="chip pillchip" href="#/" data-scroll="how" data-enter>How it works</a>
             <span class="grow"></span>
             <span class="mic" aria-hidden="true" data-enter><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></span>
-            <a class="send" href="#/signup" aria-label="Create your account" data-enter><span class="send-inner"><svg viewBox="0 0 24 24" width="44%" fill="none" stroke="#fafafa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span></a>
+            <a class="send" href="#/upload" aria-label="Upload a contract" data-enter><span class="send-inner"><svg viewBox="0 0 24 24" width="44%" fill="none" stroke="#fafafa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg></span></a>
           </div></div></div>
         <div class="proto" data-enter>Prototype · summaries are not legal advice</div>
       </div></div></section>
@@ -163,12 +144,12 @@ function pageLanding() {
 
     <section class="s3" id="how"><div class="wrap2"><h2 class="lp-h2">How it works</h2><div class="three">
       ${[['1', 'Upload', 'Add a PDF or a photo of the contract.'], ['2', 'Review', 'Check the terms and flagged clauses. Uncertain ones come first.'], ['3', 'Stay on top', 'Ask questions, browse by vendor, get reminded before it expires.']].map(([n, t, d]) => `<div class="lcard"><div class="stepnum">${n}</div><h3>${t}</h3><p>${d}</p></div>`).join('')}</div>
-      <div class="center" style="margin-top:32px"><a class="pill-cta big" href="#/signup">Get started</a></div>
+      <div class="center" style="margin-top:32px"><a class="pill-cta big" href="#/dashboard">Get started</a></div>
       <footer class="lfoot">ContractLens prototype · your data stays in this app's local database</footer></div></section>
 
     <div class="overlay" id="navOverlay" role="dialog" aria-modal="true" aria-label="Menu" hidden>
-      <nav>${links.map(([id, t]) => `<a href="#/" data-scroll="${id}">${t}</a>`).join('')}<a href="#/signin">Sign in</a></nav>
-      <div class="ov-foot"><div class="bar"></div><a class="pill-cta big block" href="#/signup">Get started</a></div></div>
+      <nav>${links.map(([id, t]) => `<a href="#/" data-scroll="${id}">${t}</a>`).join('')}</nav>
+      <div class="ov-foot"><div class="bar"></div><a class="pill-cta big block" href="#/dashboard">Get started</a></div></div>
   </div>`;
   initLanding();
 }
@@ -199,7 +180,7 @@ function initLanding() {
   const mask = (lines, base) => lines.forEach((el, i) => A(el, [{ opacity: 0, transform: 'translateY(108%)' }, { opacity: 1, transform: 'translateY(0)', offset: 0.14 }, { opacity: 1, transform: 'translateY(0)' }], { duration: 950, delay: base + i * 90, easing: REVEAL }));
   const play = () => {
     A($('.lp-logo'), [{ opacity: 0, transform: 'scale(.92)' }, { opacity: 1, transform: 'none' }], { duration: 600, easing: LIFT });
-    lift(q('.nav-links li'), 10, 0.1, 0.5, 0.05); lift(q('.burger'), 10, 0.16, 0.5); lift(q('.nav-signin,.pill-cta'), 10, 0.26, 0.5, 0.05);
+    lift(q('.nav-links li'), 10, 0.1, 0.5, 0.05); lift(q('.burger'), 10, 0.16, 0.5); lift(q('.pill-cta'), 10, 0.26, 0.5, 0.05);
     lift(q('.lp-badge')[0], 10, 0.14, 0.6);
     mask(q('.s1 .hl-line'), 200);
     lift(q('.s1 .sub'), 14, 0.52, 0.65);
@@ -222,115 +203,13 @@ function initLanding() {
   q('.s3 .lp-h2, .s3 .lcard').forEach((el) => { el.style.opacity = 0; io2.observe(el); });
 }
 
-function authShell(inner) {
-  publicTop('<a class="btn" href="#/">← Back</a>');
-  app.innerHTML = `<div class="auth-wrap"><div class="card auth-card">${inner}</div></div>`;
-}
-const fieldErr = (id) => `<div class="ferr" id="err-${id}" role="alert"></div>`;
-function showErr(id, msg) {
-  const el = $('#err-' + id); if (el) el.textContent = msg;
-  const inp = $('#' + id); if (inp) { inp.setAttribute('aria-invalid', 'true'); inp.focus(); }
-}
-const clearErrs = () => { document.querySelectorAll('.ferr').forEach((e) => { e.textContent = ''; }); document.querySelectorAll('[aria-invalid]').forEach((e) => e.removeAttribute('aria-invalid')); };
-
-function pageSignin() {
-  authShell(`<h1>Welcome back</h1><p class="muted" style="margin-top:0">Sign in to your ContractLens account.</p>
-    <form id="signin-form" class="stack" novalidate>
-      <div><label for="si-email" class="small muted">Email</label><input id="si-email" type="email" autocomplete="email" required>${fieldErr('si-email')}</div>
-      <div><label for="si-pw" class="small muted">Password</label><input id="si-pw" type="password" autocomplete="current-password" required>${fieldErr('si-pw')}</div>
-      <div class="banner err hidden" id="si-error" role="alert"></div>
-      <button class="primary big" type="submit">Sign in</button>
-    </form><p class="small muted center" style="margin-bottom:0">New here? <a href="#/signup">Create an account</a></p>`);
-  $('#si-email').focus();
-  $('#signin-form').onsubmit = async (e) => {
-    e.preventDefault(); clearErrs(); $('#si-error').classList.add('hidden');
-    const email = $('#si-email').value.trim(), password = $('#si-pw').value;
-    if (!email) return showErr('si-email', 'Enter your email.');
-    if (!password) return showErr('si-pw', 'Enter your password.');
-    const btn = e.target.querySelector('button'); btn.disabled = true;
-    try { await api('POST', '/auth/signin', { email, password }); await loadSession(); go('#/'); }
-    catch (err) { btn.disabled = false; const b = $('#si-error'); b.textContent = err.message; b.classList.remove('hidden'); }
-  };
-}
-
-const COUNTRIES = ['India', 'United States', 'United Kingdom', 'Canada', 'Australia', 'Singapore', 'United Arab Emirates', 'Germany', 'France', 'Netherlands', 'Ireland', 'New Zealand', 'South Africa', 'Other'];
-const INDUSTRIES = ['Retail & e-commerce', 'Manufacturing', 'Logistics & supply chain', 'Technology & software', 'Real estate & construction', 'Healthcare', 'Financial services', 'Professional services', 'Food & hospitality', 'Other'];
-let su = null;
-function pageSignup() {
-  su = { step: 1, email: '', password: '', confirm: '', name: '', phone: '', country: '', job_title: '', account_type: '', orgMode: 'create', orgName: '', industry: '', code: '' };
-  drawSignup();
-}
-function drawSignup() {
-  const step = su.step, dots = [1, 2, 3].map((n) => `<span class="dot ${n === step ? 'on' : n < step ? 'done' : ''}"></span>`).join('');
-  const bodies = {
-    1: `<h1>Create your account</h1><p class="muted" style="margin-top:0">Step 1 of 3 · Your sign-in details</p>
-      <div><label for="su-email" class="small muted">Email</label><input id="su-email" data-su="email" type="email" autocomplete="email" value="${esc(su.email)}">${fieldErr('su-email')}</div>
-      <div><label for="su-pw" class="small muted">Password <span class="tiny">(at least 8 characters)</span></label><input id="su-pw" data-su="password" type="password" autocomplete="new-password" value="${esc(su.password)}">${fieldErr('su-pw')}</div>
-      <div><label for="su-pw2" class="small muted">Confirm password</label><input id="su-pw2" data-su="confirm" type="password" autocomplete="new-password" value="${esc(su.confirm)}">${fieldErr('su-pw2')}</div>`,
-    2: `<h1>About you</h1><p class="muted" style="margin-top:0">Step 2 of 3 · Personal details</p>
-      <div><label for="su-name" class="small muted">Full name</label><input id="su-name" data-su="name" autocomplete="name" value="${esc(su.name)}">${fieldErr('su-name')}</div>
-      <div class="grid cols-2" style="gap:12px"><div><label for="su-phone" class="small muted">Phone <span class="tiny">(optional)</span></label><input id="su-phone" data-su="phone" type="tel" autocomplete="tel" value="${esc(su.phone)}" placeholder="+91 98765 43210">${fieldErr('su-phone')}</div>
-        <div><label for="su-country" class="small muted">Country</label><input id="su-country" data-su="country" list="countries" autocomplete="country-name" value="${esc(su.country)}"><datalist id="countries">${COUNTRIES.map((c) => `<option value="${c}">`).join('')}</datalist>${fieldErr('su-country')}</div></div>
-      <div><label for="su-title" class="small muted">Occupation / job title <span class="tiny">(optional)</span></label><input id="su-title" data-su="job_title" autocomplete="organization-title" value="${esc(su.job_title)}">${fieldErr('su-title')}</div>`,
-    3: `<h1>How will you use ContractLens?</h1><p class="muted" style="margin-top:0">Step 3 of 3 · Choose your account type</p>
-      <div class="choices" role="radiogroup" aria-label="Account type">
-        <label class="choice ${su.account_type === 'customer' ? 'sel' : ''}"><input type="radio" name="at" data-su="account_type" value="customer" ${su.account_type === 'customer' ? 'checked' : ''}><span class="ficon">👤</span><strong>Individual</strong><span class="small muted">Insurance, loans, rent, warranties and other personal contracts.</span></label>
-        <label class="choice ${su.account_type === 'business' ? 'sel' : ''}"><input type="radio" name="at" data-su="account_type" value="business" ${su.account_type === 'business' ? 'checked' : ''}><span class="ficon">🏢</span><strong>Business</strong><span class="small muted">Vendor, supplier and customer contracts, licences and regulatory documents. Shared with your team.</span></label></div>${fieldErr('su-type')}
-      ${su.account_type === 'business' ? `<div class="stack" style="margin-top:14px">
-        <div class="seg" role="radiogroup" aria-label="Organisation"><label class="${su.orgMode === 'create' ? 'sel' : ''}"><input type="radio" name="om" data-su="orgMode" value="create" ${su.orgMode === 'create' ? 'checked' : ''}>Create new organisation</label><label class="${su.orgMode === 'join' ? 'sel' : ''}"><input type="radio" name="om" data-su="orgMode" value="join" ${su.orgMode === 'join' ? 'checked' : ''}>Join existing</label></div>
-        ${su.orgMode === 'create' ? `<div><label for="su-org" class="small muted">Organisation name</label><input id="su-org" data-su="orgName" autocomplete="organization" value="${esc(su.orgName)}">${fieldErr('su-org')}</div>
-          <div><label for="su-ind" class="small muted">Industry <span class="tiny">(optional)</span></label><select id="su-ind" data-su="industry"><option value="">Select…</option>${INDUSTRIES.map((i) => `<option ${su.industry === i ? 'selected' : ''}>${i}</option>`).join('')}</select></div>`
-          : `<div><label for="su-code" class="small muted">Invite code</label><input id="su-code" data-su="code" value="${esc(su.code)}" placeholder="8-character code from a teammate" autocapitalize="characters" style="text-transform:uppercase;letter-spacing:.1em">${fieldErr('su-code')}<div class="tiny muted" style="margin-top:4px">Teammates find it under Settings once they're signed in. Everyone in an organisation has the same access.</div></div>`}</div>` : ''}`,
-  };
-  authShell(`<form id="signup-form" class="stack" novalidate><div class="dots" aria-hidden="true">${dots}</div>${bodies[step]}
-    <div class="banner err hidden" id="su-error" role="alert"></div>
-    <div class="row between" style="margin-top:6px">${step > 1 ? '<button type="button" data-act="su-back">Back</button>' : '<span></span>'}<button class="primary" type="submit">${step === 3 ? 'Create account' : 'Continue'}</button></div></form>
-    <p class="small muted center" style="margin-bottom:0">Already have an account? <a href="#/signin">Sign in</a></p>`);
-  $('#signup-form').querySelector('input:not([type=radio]),select')?.focus();
-  $('#signup-form').onsubmit = (e) => { e.preventDefault(); submitSignupStep(); };
-}
-function validateStep() {
-  clearErrs();
-  const bad = (id, msg) => { showErr(id, msg); return false; };
-  if (su.step === 1) {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(su.email.trim())) return bad('su-email', 'Enter a valid email address.');
-    if (su.password.length < 8) return bad('su-pw', 'Use at least 8 characters.');
-    if (su.password !== su.confirm) return bad('su-pw2', "Passwords don't match.");
-  } else if (su.step === 2) {
-    if (su.name.trim().length < 2) return bad('su-name', 'Enter your full name.');
-    if (su.phone.trim() && !/^[+\d][\d\s\-().]{6,24}$/.test(su.phone.trim())) return bad('su-phone', 'Enter a valid phone number, or leave it blank.');
-  } else {
-    if (!su.account_type) { $('#err-su-type').textContent = 'Choose Individual or Business to continue.'; return false; }
-    if (su.account_type === 'business' && su.orgMode === 'create' && su.orgName.trim().length < 2) return bad('su-org', 'Enter your organisation name.');
-    if (su.account_type === 'business' && su.orgMode === 'join' && !su.code.trim()) return bad('su-code', 'Enter the invite code.');
-  }
-  return true;
-}
-async function submitSignupStep() {
-  if (!validateStep()) return;
-  if (su.step < 3) { su.step += 1; drawSignup(); return; }
-  const btn = $('#signup-form button[type=submit]'); btn.disabled = true;
-  const body = { email: su.email.trim(), password: su.password, name: su.name.trim(), phone: su.phone.trim(), country: su.country.trim(), job_title: su.job_title.trim(), account_type: su.account_type,
-    org: su.account_type === 'business' ? (su.orgMode === 'join' ? { mode: 'join', code: su.code } : { mode: 'create', name: su.orgName.trim(), industry: su.industry }) : undefined };
-  try {
-    await api('POST', '/auth/signup', body); await loadSession();
-    toast(`Welcome, ${state.session.user.name.split(' ')[0]}! Upload your first contract to get started.`); go('#/');
-  } catch (e) {
-    btn.disabled = false;
-    const stepOf = { email: 1, password: 1, name: 2, phone: 2, account_type: 3, org_name: 3, code: 3 }[e.data?.field];
-    const idOf = { email: 'su-email', password: 'su-pw', name: 'su-name', phone: 'su-phone', org_name: 'su-org', code: 'su-code' }[e.data?.field];
-    if (stepOf && stepOf !== su.step) { su.step = stepOf; drawSignup(); }
-    if (idOf) showErr(idOf, e.message); else { const b = $('#su-error'); b.textContent = e.message; b.classList.remove('hidden'); }
-  }
-}
-
 // ------------------------------------------------------------------ dashboard
 async function pageDashboard() {
   const d = await api('GET', '/dashboard');
   state.notifs = d.notifications; renderTop();
   const c = d.counts;
   app.innerHTML = `
-    <div class="page-head"><div><h1>Dashboard</h1><div class="muted">${esc(state.session.orgName || state.session.user.name)} · reminder windows: ${d.windows.join(' / ')} days</div></div>
+    <div class="page-head"><div><h1>Dashboard</h1><div class="muted">Reminder windows: ${d.windows.join(' / ')} days</div></div>
       <a class="btn primary" href="#/upload">Upload contract</a></div>
     <div class="grid cols-3" style="margin-bottom:16px">
       <a class="card stat" href="#/contracts" style="text-decoration:none"><span class="muted">Active contracts</span><span class="n">${c.active || 0}</span></a>
@@ -607,21 +486,15 @@ function vendorModal(data) {
 }
 
 // ------------------------------------------------------------------ settings
-async function settingsModal() {
-  const s = state.session, u = s.user;
-  const org = u.account_type === 'business' ? await api('GET', '/org').catch(() => null) : null;
+function settingsModal() {
+  const s = state.session;
   modal(`<h2>Settings</h2>
-    <div class="small muted" style="margin-bottom:14px">${esc(u.name)} · ${esc(u.email)}${u.phone ? ' · ' + esc(u.phone) : ''}${u.country ? ' · ' + esc(u.country) : ''}${u.job_title ? ' · ' + esc(u.job_title) : ''}</div>
     <fieldset style="border:0;padding:0;margin:0 0 14px"><legend><strong>Vendor chain</strong></legend>
       <label class="check" style="margin:6px 0"><input type="radio" name="vm" value="manual" ${s.settings.vendor_mode === 'manual' ? 'checked' : ''}><span><strong>Manual</strong> — I pick or create the vendor for each contract; I'm asked before merging similar names.</span></label>
       <label class="check" style="margin:6px 0"><input type="radio" name="vm" value="automatic" ${s.settings.vendor_mode === 'automatic' ? 'checked' : ''}><span><strong>Automatic</strong> — strong matches (85%+) are linked to the existing vendor for me. I still review before saving.</span></label></fieldset>
-    <label for="aw"><strong>Reminder windows</strong> <span class="muted small">(days before expiry, comma-separated${org ? '; shared by your whole team' : ''})</span></label>
+    <label for="aw"><strong>Reminder windows</strong> <span class="muted small">(days before expiry, comma-separated)</span></label>
     <input id="aw" value="${s.settings.alert_windows.join(', ')}">
     <p class="tiny muted">Passive: the dashboard always shows contracts inside the widest window. Active: a notification fires once per window.</p>
-    ${org ? `<div style="border-top:1px solid var(--border);margin-top:14px;padding-top:14px"><strong>Team · ${esc(org.name)}</strong>
-      <p class="small muted" style="margin:4px 0 8px">Everyone in the organisation has the same access to contracts. Share this code so a colleague can choose “Join existing organisation” when they sign up.</p>
-      <div class="row"><code class="code">${esc(org.invite_code)}</code><button data-act="copy-code" data-code="${esc(org.invite_code)}">Copy</button></div>
-      <ul class="small" style="padding-left:18px;margin:10px 0 0">${org.members.map((m) => `<li>${esc(m.name)} <span class="muted">· ${esc(m.email)}${m.job_title ? ' · ' + esc(m.job_title) : ''}</span></li>`).join('')}</ul></div>` : ''}
     <div class="row" style="justify-content:flex-end;margin-top:16px"><button data-act="close-modal">Cancel</button><button class="primary" data-act="save-settings">Save</button></div>`);
 }
 
@@ -629,7 +502,6 @@ async function settingsModal() {
 document.addEventListener('click', async (e) => {
   const t = e.target.closest('[data-act]');
   if (!e.target.closest('.bell')) $('#bell-pop')?.classList.add('hidden');
-  if (!e.target.closest('.usermenu')) $('#user-pop')?.classList.add('hidden');
   if (!t) return;
   const a = t.dataset.act;
   try {
@@ -638,11 +510,7 @@ document.addEventListener('click', async (e) => {
     else if (a === 'bell') { renderBell(); $('#bell-pop').classList.toggle('hidden'); e.stopPropagation(); }
     else if (a === 'read-all') { await api('POST', '/notifications/read-all'); await refreshNotifs(); renderBell(); $('#bell-pop').classList.remove('hidden'); }
     else if (a === 'run-reminders') { const r = await api('POST', '/reminders/run'); toast(r.created ? `${r.created} new reminder(s) sent` : 'No new reminders due'); route(); }
-    else if (a === 'su-back') { su.step -= 1; drawSignup(); }
-    else if (a === 'user-menu') { $('#user-pop').classList.toggle('hidden'); e.stopPropagation(); }
-    else if (a === 'signout') { await api('POST', '/auth/signout'); state.session = null; state.notifs = []; toast('Signed out'); go('#/'); }
-    else if (a === 'copy-code') { try { await navigator.clipboard.writeText(t.dataset.code); toast('Invite code copied'); } catch { toast('Copy failed — select the code and copy it manually', true); } }
-    else if (a === 'settings') { $('#user-pop')?.classList.add('hidden'); await settingsModal(); }
+    else if (a === 'settings') settingsModal();
     else if (a === 'save-settings') {
       const windows = $('#aw').value.split(/[ ,]+/).filter(Boolean).map(Number);
       const body = { vendor_mode: $('input[name=vm]:checked').value }; body.alert_windows = windows;
@@ -670,7 +538,6 @@ document.addEventListener('click', async (e) => {
 
 function onEdit(e) {
   const t = e.target;
-  if (t.dataset.su) { su[t.dataset.su] = t.value; return; }
   if (t.dataset.bind) { // title / type / summary / vendor
     const b = t.dataset.bind;
     if (b === 'vendor') { ed.vendor = { id: null, name: t.value }; ed.autoNote = ''; } else ed[b] = t.value;
@@ -690,15 +557,8 @@ function onEdit(e) {
   updateProgress();
 }
 document.addEventListener('input', onEdit);
-document.addEventListener('change', (e) => {
-  const t = e.target;
-  if (t.dataset?.su && t.type === 'radio') { su[t.dataset.su] = t.value; drawSignup(); }
-  else if (t.dataset?.field === 'recurrence') onEdit(e);
-});
+document.addEventListener('change', (e) => { if (e.target.dataset?.field === 'recurrence') onEdit(e); });
 window.addEventListener('hashchange', route);
 
-async function loadSession() {
-  try { state.session = await api('GET', '/session'); } catch (e) { if (e.status === 401) state.session = null; else throw e; }
-  renderTop();
-}
-loadSession().then(route).catch((e) => { app.innerHTML = `<div class="banner err">Could not reach the server: ${esc(e.message)}</div>`; });
+async function loadSession() { state.session = await api('GET', '/session'); }
+loadSession().then(() => { if (!location.hash) location.hash = '#/'; route(); }).catch((e) => { app.innerHTML = `<div class="banner err">Could not reach the server: ${esc(e.message)}</div>`; });

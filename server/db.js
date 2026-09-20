@@ -9,26 +9,9 @@ export const db = new DatabaseSync(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
 
 db.exec(`
-CREATE TABLE IF NOT EXISTS org (
-  id INTEGER PRIMARY KEY, name TEXT NOT NULL, industry TEXT, invite_code TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS user (
-  id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, password_hash TEXT NOT NULL,
-  phone TEXT, country TEXT, job_title TEXT,
-  account_type TEXT NOT NULL CHECK (account_type IN ('customer','business')),
-  org_id INTEGER REFERENCES org(id), created_at TEXT NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_user_email ON user(email);
--- Every member of an organisation has the same permissions (no uploader/viewer split).
-CREATE TABLE IF NOT EXISTS org_member (
-  org_id INTEGER NOT NULL REFERENCES org(id), user_id INTEGER NOT NULL REFERENCES user(id),
-  joined_at TEXT NOT NULL, PRIMARY KEY (org_id, user_id)
-);
-CREATE TABLE IF NOT EXISTS session (
-  token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES user(id) ON DELETE CASCADE,
-  created_at TEXT NOT NULL, expires_at TEXT NOT NULL
-);
--- owner_key is 'org:<id>' for business users and 'user:<id>' for customers: it scopes every row.
+-- No accounts: one local workspace, one implicit user (id 1).
+CREATE TABLE IF NOT EXISTS user (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+-- owner_key scopes every row; with no accounts it is always 'workspace:1'.
 CREATE TABLE IF NOT EXISTS vendor (
   id INTEGER PRIMARY KEY, owner_key TEXT NOT NULL, canonical_name TEXT NOT NULL, aliases TEXT NOT NULL DEFAULT '[]'
 );
@@ -97,6 +80,7 @@ export function tx(fn) {
 }
 
 export function seed() {
+  db.prepare("INSERT OR IGNORE INTO user (id, name) VALUES (1, 'You')").run();
   if (db.prepare('SELECT COUNT(*) AS n FROM regulation_update').get().n > 0) return;
   const r = db.prepare('INSERT INTO regulation_update (title, authority, summary, published, effective, keywords) VALUES (?,?,?,?,?,?)');
   r.run(

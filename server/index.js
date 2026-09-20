@@ -10,35 +10,22 @@ import { answerQuestion } from './chat.js';
 import { matchVendors, createVendor, addAlias, AUTO_THRESHOLD } from './vendors.js';
 import { expiringContracts, runReminders, refreshStatuses, daysUntil, alertWindows } from './alerts.js';
 import { refLabel } from './pdf.js';
-import { registerAuthRoutes, requireUser } from './auth.js';
 import { wrap, httpError } from './util.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } });
 
-// ------------------------------------------------------------------ auth: public routes first, then everything under /api requires a session
-registerAuthRoutes(app);
-app.use('/api', requireUser);
+// ------------------------------------------------------------------ single open workspace (no accounts)
+const WORKSPACE = { user: { id: 1, name: 'You' }, ownerKey: 'workspace:1', ownerName: 'the person who uploaded this contract (name not provided)' };
+app.use('/api', (req, res, next) => { req.ctx = WORKSPACE; next(); });
 
 const vendorMode = (ctx) => getSetting(`vendor_mode:user:${ctx.user.id}`, 'manual');
 
 // ------------------------------------------------------------------ session / settings
 app.get('/api/session', (req, res) => {
-  const { user, org, ownerKey } = req.ctx;
-  const { id, name, email, phone, country, job_title, account_type } = user;
-  res.json({
-    user: { id, name, email, phone, country, job_title, account_type }, orgName: org?.name || null, mode: MODE, model: MODE === 'live' ? MODEL : null,
-    settings: { vendor_mode: vendorMode(req.ctx), alert_windows: alertWindows(ownerKey) },
-  });
-});
-
-// Team: everyone in an organisation has identical access; the invite code lets colleagues join at sign-up.
-app.get('/api/org', (req, res) => {
-  const { org } = req.ctx;
-  if (!org) return res.json(null);
-  const members = db.prepare(`SELECT u.name, u.email, u.job_title FROM org_member m JOIN user u ON u.id = m.user_id WHERE m.org_id = ? ORDER BY m.joined_at`).all(org.id);
-  res.json({ name: org.name, industry: org.industry, invite_code: org.invite_code, members });
+  const { ownerKey } = req.ctx;
+  res.json({ mode: MODE, model: MODE === 'live' ? MODEL : null, settings: { vendor_mode: vendorMode(req.ctx), alert_windows: alertWindows(ownerKey) } });
 });
 
 app.put('/api/settings', (req, res) => {

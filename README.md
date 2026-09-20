@@ -19,9 +19,7 @@ ANTHROPIC_API_KEY=sk-ant-... npm start
 Other env: `PORT` (3210), `CL_DATA_DIR` (`./data`), `ALERT_WEBHOOK_URL` (POST active reminders).
 
 ## Try it
-Open the app → **Get started** → 3-step sign-up (account → personal details → Individual or Business). Business users either create an organisation or join one with an **invite code** (Settings → Team). Everyone in an organisation has identical access; there are no uploader/viewer roles. Then upload the samples from the Upload page: the Nimbus pair demonstrates vendor merge (two spellings of one vendor); the SPCB consent has a low-confidence fee field; the MSA is full of risky clauses.
-
-Accounts: email + password (scrypt-hashed), HttpOnly session cookie (30 days), login throttling. Prototype-grade: no email verification or password reset.
+There are no accounts or sign-in: the app opens straight into a single local workspace. Click **Get started** on the landing page, then upload the samples from the Upload page (or run `npm run seed:demo` with the server up to load mock contracts). The Nimbus pair demonstrates vendor merge (two spellings of one vendor); the SPCB consent has a low-confidence fee field; the MSA is full of risky clauses.
 
 ## Where the PRD lives
 | PRD | Implementation |
@@ -31,7 +29,6 @@ Accounts: email + password (scrypt-hashed), HttpOnly session cookie (30 days), l
 | Chat with citations, explicit uncertainty | `server/chat.js` (invalid citations dropped; low confidence forces "I'm not certain:") |
 | Vendor resolution, manual/automatic chain | `server/vendors.js` + confirm flow; mode is a per-user setting |
 | Alerts: passive + active | `server/alerts.js` (dashboard computed on load; notifications fire once per window, logged to `data/outbox.log`) |
-| Accounts / teams | `server/auth.js`: sign-up/sign-in, personal details, Individual vs Business, org invite codes, equal access for all members |
 | Regulatory change | **Mocked**: 2 seeded records keyword-matched to `regulatory_class` contracts |
 
 ## Test
@@ -43,4 +40,4 @@ BASE=http://localhost:3299 npm test     # needs a FRESH data dir
 ## Known limits
 - The live Claude path has not been exercised end-to-end in this repo's build environment (no API key was available); offline mode is what the tests cover.
 - Not built (Phase 2 per PRD): version diffing, cross-contract queries, full RBAC, live regulatory monitoring, per-payment reminders, renewal-notice-deadline alerts. The diagram's business "create / verify and accept contracts" flow is also not built.
-- Auth is prototype-grade: no email verification, password reset or MFA.
+- No authentication: anyone who can reach the server can see and change everything. Run it locally only.
