@@ -1,4 +1,4 @@
-import { db, unj } from './db.js';
+import { q, one, unj } from './db.js';
 
 export const SUGGEST_THRESHOLD = 0.6; // offer "merge with existing vendor X?"
 export const AUTO_THRESHOLD = 0.85;   // automatic vendor chain links without asking
@@ -26,26 +26,25 @@ export function similarity(a, b) {
 }
 
 /** Existing vendors for this owner ranked by similarity to `name` (canonical name and aliases). */
-export function matchVendors(ownerKey, name, min = SUGGEST_THRESHOLD) {
-  const rows = db.prepare('SELECT id, canonical_name, aliases FROM vendor WHERE owner_key = ?').all(ownerKey);
+export async function matchVendors(ownerKey, name, min = SUGGEST_THRESHOLD) {
+  const rows = await q('SELECT id, canonical_name, aliases FROM vendor WHERE owner_key = ?', [ownerKey]);
   return rows
     .map((v) => ({ id: v.id, canonical_name: v.canonical_name, score: Math.max(similarity(name, v.canonical_name), ...(unj(v.aliases) || []).map((a) => similarity(name, a)), 0) }))
     .filter((m) => m.score >= min)
     .sort((a, b) => b.score - a.score);
 }
 
-export function createVendor(ownerKey, name) {
-  const r = db.prepare('INSERT INTO vendor (owner_key, canonical_name, aliases) VALUES (?,?,?)').run(ownerKey, name.trim(), '[]');
-  return Number(r.lastInsertRowid);
+export async function createVendor(ownerKey, name, run = { one }) {
+  return (await run.one('INSERT INTO vendor (owner_key, canonical_name, aliases) VALUES (?,?,?) RETURNING id', [ownerKey, name.trim(), '[]'])).id;
 }
 
 /** Record a spelling variant so future matches on either form are exact. */
-export function addAlias(vendorId, name) {
-  const v = db.prepare('SELECT canonical_name, aliases FROM vendor WHERE id = ?').get(vendorId);
+export async function addAlias(vendorId, name, run = { q, one }) {
+  const v = await run.one('SELECT canonical_name, aliases FROM vendor WHERE id = ?', [vendorId]);
   const aliases = unj(v.aliases) || [];
   const n = name.trim();
   if (n && n !== v.canonical_name && !aliases.includes(n)) {
     aliases.push(n);
-    db.prepare('UPDATE vendor SET aliases = ? WHERE id = ?').run(JSON.stringify(aliases), vendorId);
+    await run.q('UPDATE vendor SET aliases = ? WHERE id = ?', [JSON.stringify(aliases), vendorId]);
   }
 }

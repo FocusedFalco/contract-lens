@@ -1,5 +1,5 @@
 // ContractLens frontend: vanilla JS, hash router, no build step.
-const state = { session: null, notifs: [], timer: null, vendors: [] };
+const state = { session: null, notifs: [], timer: null, vendors: [], gated: false };
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const app = $('#app');
@@ -10,7 +10,7 @@ async function api(method, url, body) {
   else if (body !== undefined) { opts.headers['content-type'] = 'application/json'; opts.body = JSON.stringify(body); }
   const res = await fetch('/api' + url, opts);
   const data = await res.json().catch(() => null);
-  if (!res.ok) throw Object.assign(new Error(data?.error || res.statusText), { status: res.status, data });
+  if (!res.ok) throw Object.assign(new Error(data?.error || (res.status === 404 ? 'The API was not found (404). The server is not running or is not deployed correctly.' : `Server error (${res.status}).`)), { status: res.status, data });
   return data;
 }
 function toast(msg, err) {
@@ -55,7 +55,7 @@ function renderTop() {
       <a href="#/upload" class="${act('#/upload')}">Upload</a>
     </nav>
     <span class="spacer"></span>
-    <span class="mode ${s.mode}" title="${s.mode === 'live' ? 'Using Claude (' + esc(s.model) + ')' : 'No API key: replays pre-computed results for the /samples files'}">${s.mode === 'live' ? 'Live · Claude' : 'Offline demo'}</span>
+    <span class="mode ${s.mode}" title="${s.mode === 'live' ? 'Using ' + esc(s.provider) + ' (' + esc(s.model) + ')' : 'No AI key: replays pre-computed results for the sample files'}">${s.mode === 'live' ? 'Live · ' + (s.provider === 'gemini' ? 'Gemini' : 'Claude') : 'Offline demo'}</span>
     <div class="bell" style="position:relative">
       <button class="icon" data-act="bell" aria-label="Notifications">🔔</button>${unread ? `<span class="count">${unread}</span>` : ''}
       <div class="pop hidden" id="bell-pop"></div>
@@ -77,6 +77,7 @@ async function route() {
   document.body.classList.remove('landing', 'menu-open'); document.documentElement.classList.remove('entrance', 'entrance-s2', 'hero-ready');
   const h = location.hash.replace(/^#/, '') || '/';
   if (h === '/') return pageLanding();
+  if (state.gated) return pageGate();
   renderTop();
   try {
     let m;
@@ -88,11 +89,25 @@ async function route() {
     else if ((m = h.match(/^\/contract\/(\d+)$/))) await pageContract(m[1]);
     else app.innerHTML = '<div class="empty">Page not found. <a href="#/dashboard">Go to dashboard</a></div>';
   } catch (e) {
+    if (e.data?.gate) { state.gated = true; return pageGate(); }
     app.innerHTML = `<div class="banner err">${esc(e.message)}</div>`;
   }
   refreshNotifs();
 }
 
+
+// ------------------------------------------------------------------ access code (only when the server sets ACCESS_PASSWORD)
+function pageGate() {
+  document.body.classList.remove('landing'); $('#top').innerHTML = `<a class="brand" href="#/">${logoMark()}ContractLens</a>`;
+  app.innerHTML = `<div class="auth-wrap"><div class="card auth-card"><h1>Enter access code</h1><p class="muted" style="margin-top:0">This workspace is protected. Ask the owner for the code.</p>
+    <form id="gate-form" class="stack"><input id="gate-code" type="password" autocomplete="current-password" aria-label="Access code" required><div class="ferr" id="gate-err" role="alert"></div><button class="primary" type="submit">Continue</button></form></div></div>`;
+  $('#gate-code').focus();
+  $('#gate-form').onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api('POST', '/unlock', { code: $('#gate-code').value }); state.gated = false; await loadSession(); route(); }
+    catch (err) { $('#gate-err').textContent = err.message; }
+  };
+}
 
 // ------------------------------------------------------------------ landing
 function pageLanding() {
@@ -262,7 +277,7 @@ const SAMPLES = [
 async function pageUpload() {
   app.innerHTML = `<div class="page-head"><div><h1>Upload a contract</h1><div class="muted">PDF, PNG, JPG or WebP · up to 25 MB. You'll review everything before it's saved.</div></div></div>
     <label class="drop" id="drop" style="display:block;cursor:pointer"><div style="font-size:32px">📄</div><strong>Drop files here or click to choose</strong>
-      <div class="muted small">Photos and scans need live mode (Claude API key).</div><input id="file" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/*" class="hidden"></label>
+      <div class="muted small">Photos and scans need live mode (an AI key).</div><input id="file" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/*" class="hidden"></label>
     <div id="up-status" style="margin:12px 0"></div>
     <h2 style="margin-top:24px">Try a sample</h2>
     <div class="samples">${SAMPLES.map(([f, t, d]) => `<div class="card sample"><strong>${t}</strong><span class="small muted">${d}</span><div class="row"><button class="primary" data-act="sample" data-file="${f}">Upload this</button><a class="small" href="/samples/${f}">download</a></div></div>`).join('')}</div>`;
@@ -374,7 +389,7 @@ function drawContract() {
   app.innerHTML = `
     <div class="page-head"><div><a class="small" href="#/contracts">← Contracts</a>
       <div class="row wrap"><h1 style="margin:0">${esc(ed.title || c.file_name)}</h1>${statusBadge(c.status)}</div>
-      <div class="small muted">${esc(c.file_name)} · uploaded ${new Date(c.uploaded_at).toLocaleDateString()} · ${c.extraction_mode === 'live' ? 'read by Claude' : 'offline demo extraction'} ·
+      <div class="small muted">${esc(c.file_name)} · uploaded ${new Date(c.uploaded_at).toLocaleDateString()} · ${String(c.extraction_mode).startsWith('live') ? 'read by ' + (c.extraction_mode.endsWith('gemini') ? 'Gemini' : 'Claude') : 'offline demo extraction'} ·
         <a href="/api/contracts/${c.id}/file" target="_blank" rel="noopener">open original file</a></div></div>
       <div class="row">${write && !pending && !ed.editing ? '<button data-act="edit">Edit details</button>' : ''}${write ? `<button class="danger" data-act="delete" data-id="${c.id}">Delete</button>` : ''}</div></div>
     ${pending ? `<div class="banner info" style="margin-bottom:12px"><strong>Review required.</strong> Nothing is saved as active until you have checked every ${CONF.low[0]} low/${CONF.medium[0]} medium-confidence field and every ⚑ flagged clause below.${!write ? ' Your role (Viewer) cannot confirm.' : ''}</div>` : ''}
@@ -560,5 +575,7 @@ document.addEventListener('input', onEdit);
 document.addEventListener('change', (e) => { if (e.target.dataset?.field === 'recurrence') onEdit(e); });
 window.addEventListener('hashchange', route);
 
-async function loadSession() { state.session = await api('GET', '/session'); }
+async function loadSession() {
+  try { state.session = await api('GET', '/session'); state.gated = false; } catch (e) { if (e.data?.gate) state.gated = true; else throw e; }
+}
 loadSession().then(() => { if (!location.hash) location.hash = '#/'; route(); }).catch((e) => { app.innerHTML = `<div class="banner err">Could not reach the server: ${esc(e.message)}</div>`; });

@@ -5,7 +5,7 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 
 const BASE = process.env.BASE || 'http://localhost:3210';
-const S = (f) => path.join('samples', f);
+const S = (f) => path.join('public', 'samples', f);
 let passed = 0;
 const step = async (name, fn) => { try { await fn(); passed++; console.log(`  ✓ ${name}`); } catch (e) { console.error(`  ✗ ${name}\n    ${e.message}`); process.exitCode = 1; } };
 

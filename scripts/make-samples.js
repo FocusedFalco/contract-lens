@@ -7,8 +7,9 @@ import PDFDocument from 'pdfkit';
 import { ROOT } from '../server/config.js';
 import { pdfPageTexts, splitParagraphs } from '../server/pdf.js';
 
-const OUT = path.join(ROOT, 'samples');
-const FIX = path.join(OUT, 'fixtures');
+const OUT = path.join(ROOT, 'public', 'samples'); // PDFs are served statically
+const FIX = path.join(ROOT, 'samples', 'fixtures'); // offline extraction results, bundled with the API function
+fs.mkdirSync(OUT, { recursive: true });
 fs.mkdirSync(FIX, { recursive: true });
 
 const today = new Date(); today.setUTCHours(0, 0, 0, 0);
@@ -241,4 +242,4 @@ await build('nimbus-hosting-order-form-2024.pdf', [
   summary: 'This is a hosting arrangement where Nimbus ran the Acme storefront on its cloud for about a year at USD 900 a quarter. It renews itself for another year unless Acme gives 60 days\' notice, and either side can walk away with 90 days\' notice. Nimbus promised 99% uptime and daily backups.',
 }));
 
-console.log(`\nSamples in ${OUT}\nFixtures in ${FIX}`);
+console.log(`\nSample PDFs in ${OUT}\nFixtures in ${FIX}`);

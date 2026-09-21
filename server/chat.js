@@ -1,10 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { MODE, MODEL } from './config.js';
+import { MODE, PROVIDER } from './config.js';
+import { generateJson } from './llm.js';
 import { tagged } from './extract.js';
 import { refLabel } from './pdf.js';
-
-let _client;
-const client = () => (_client ??= new Anthropic());
 
 const STOP = new Set('a an the of to in on for and or is are was be by with at as it this that what which who when how do does can i my me we our you your if any there their its from about under over into than then so not no'.split(' '));
 const tokens = (s) => String(s).toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter((t) => t.length > 1 && !STOP.has(t));
@@ -126,19 +123,12 @@ export async function answerQuestion({ question, paragraphs, fields, flags, hist
       }
       ctx = paragraphs.filter((p) => picked.has(p.id));
     }
-    const msg = await client().messages.create({
-      model: MODEL, max_tokens: 4000,
-      system: [
-        { type: 'text', text: CHAT_SYSTEM },
-        { type: 'text', text: `<reviewed_fields>\n${fieldText(fields)}\n</reviewed_fields>\n\n<contract>\n${tagged(ctx)}\n</contract>`, cache_control: { type: 'ephemeral' } },
-      ],
-      output_config: { effort: 'low', format: { type: 'json_schema', schema: CHAT_SCHEMA } },
+    out = await generateJson({
+      system: CHAT_SYSTEM, schema: CHAT_SCHEMA, effort: 'low', what: 'answer',
+      context: `<reviewed_fields>\n${fieldText(fields)}\n</reviewed_fields>\n\n<contract>\n${tagged(ctx)}\n</contract>`,
       messages: [...history.slice(-6).map((m) => ({ role: m.role, content: m.content })), { role: 'user', content: question }],
     });
-    if (msg.stop_reason === 'refusal') throw new Error('The model declined to answer this question.');
-    const block = msg.content.find((b) => b.type === 'text');
-    out = JSON.parse(block.text);
-    mode = 'live';
+    mode = `live-${PROVIDER}`;
   }
 
   // Enforce the non-negotiables regardless of what the model returned.

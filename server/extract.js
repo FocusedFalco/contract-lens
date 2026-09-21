@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import Anthropic from '@anthropic-ai/sdk';
-import { MODE, MODEL, FIXTURE_DIR } from './config.js';
+import { MODE, PROVIDER, FIXTURE_DIR } from './config.js';
+import { generateJson } from './llm.js';
 import { pdfPageTexts, splitParagraphs, hasTextLayer } from './pdf.js';
 
 export const FIELD_NAMES = ['parties', 'effective_date', 'expiration_date', 'renewal_terms', 'payment_terms', 'termination_conditions', 'service_obligations'];
@@ -12,9 +12,6 @@ const IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'
 
 export const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 export const isSupportedMime = (m) => m === 'application/pdf' || IMAGE_MIME.has(m);
-
-let _client;
-const client = () => (_client ??= new Anthropic());
 
 // ------------------------------------------------------------------ schemas (structured outputs)
 const nullable = (t) => ({ type: [t, 'null'] });
@@ -97,14 +94,6 @@ Rules:
 const TRANSCRIBE_SYSTEM = `You transcribe a photographed or scanned contract into paragraphs, in reading order. Keep numbered clauses (e.g. "4.2") as separate paragraphs and copy the clause number into "clause" (null if none). Transcribe exactly; never fix, guess or complete text. Write [illegible] where you cannot read something. Set legibility to "handwritten" if the main content is handwritten, "poor" if a lot is hard to read, else "good". Use "notes" to mention cut-off edges, missing pages, stamps or signatures.`;
 
 // ------------------------------------------------------------------ helpers
-function parseModelJson(msg, what) {
-  if (msg.stop_reason === 'refusal') throw new Error(`The model declined to process this ${what}.`);
-  if (msg.stop_reason === 'max_tokens') throw new Error(`The ${what} was too long for one response (max_tokens reached).`);
-  const block = msg.content.find((b) => b.type === 'text');
-  if (!block) throw new Error(`No text returned for ${what}.`);
-  return JSON.parse(block.text);
-}
-
 const tagged = (paragraphs) => paragraphs.map((p) => `[${p.id}] ${p.text}`).join('\n\n');
 
 /** Turn model-transcribed paragraphs into the same shape the PDF splitter produces. */
@@ -154,15 +143,10 @@ export function normalise(raw, paragraphs, { forceLow = false } = {}) {
 
 // ------------------------------------------------------------------ paragraphs for a file
 async function transcribeWithVision(buffer, mime) {
-  const isPdf = mime === 'application/pdf';
-  const source = { type: 'base64', media_type: mime, data: buffer.toString('base64') };
-  const msg = await client().messages.create({
-    model: MODEL, max_tokens: 16000,
-    system: TRANSCRIBE_SYSTEM,
-    output_config: { effort: 'low', format: { type: 'json_schema', schema: TRANSCRIBE_SCHEMA } },
-    messages: [{ role: 'user', content: [{ type: isPdf ? 'document' : 'image', source }, { type: 'text', text: 'Transcribe this contract into paragraphs.' }] }],
+  const out = await generateJson({
+    system: TRANSCRIBE_SYSTEM, schema: TRANSCRIBE_SCHEMA, effort: 'low', what: 'transcription',
+    messages: [{ role: 'user', content: 'Transcribe this contract into paragraphs.' }], media: { mime, base64: buffer.toString('base64') },
   });
-  const out = parseModelJson(msg, 'transcription');
   return { paragraphs: idParagraphs(out.paragraphs), legibility: out.legibility, notes: out.notes };
 }
 
@@ -172,7 +156,7 @@ async function getParagraphs(buffer, mime) {
     if (hasTextLayer(pages)) return { paragraphs: splitParagraphs(pages), legibility: 'good', notes: '' };
   }
   if (MODE !== 'live') {
-    throw new Error('This file is an image or scanned PDF with no text layer. Reading it needs the Claude API (set ANTHROPIC_API_KEY and restart); the offline demo mode only supports text PDFs.');
+    throw new Error('This file is an image or scanned PDF with no text layer. Reading it needs an AI key (set GEMINI_API_KEY or ANTHROPIC_API_KEY and restart); the offline demo mode only supports text PDFs.');
   }
   return transcribeWithVision(buffer, mime);
 }
@@ -189,22 +173,19 @@ export async function extractContract({ buffer, mime, fileName, ownerName }) {
   if (MODE !== 'live') {
     const fixturePath = path.join(FIXTURE_DIR, `${sha256(buffer)}.json`);
     if (!fs.existsSync(fixturePath)) {
-      throw new Error(`Offline demo mode has no pre-computed extraction for "${fileName}". Upload one of the files in /samples, or set ANTHROPIC_API_KEY and restart for live extraction.`);
+      throw new Error(`Offline demo mode has no pre-computed extraction for "${fileName}". Upload one of the sample files, or set GEMINI_API_KEY (or ANTHROPIC_API_KEY) and restart for live extraction of any contract.`);
     }
     const fx = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
     const fields = Object.fromEntries(Object.entries(fx.fields).map(([k, v]) => [k, { value: v.value, confidence: v.confidence, source_refs: v.refs, rationale: v.rationale }]));
     return { ...normalise({ ...fx, fields }, paragraphs), mode: 'offline-fixture' };
   }
 
-  const msg = await client().messages.create({
-    model: MODEL, max_tokens: 16000,
-    system: EXTRACTION_SYSTEM,
-    output_config: { effort: 'medium', format: { type: 'json_schema', schema: EXTRACTION_SCHEMA } },
+  const raw = await generateJson({
+    system: EXTRACTION_SYSTEM, schema: EXTRACTION_SCHEMA, effort: 'medium', what: 'extraction',
     messages: [{ role: 'user', content: `Document owner (the user's own name/organisation): ${ownerName}\nFile name: ${fileName}\n\n<contract>\n${tagged(paragraphs)}\n</contract>` }],
   });
-  const raw = parseModelJson(msg, 'extraction');
   if (notes) raw.doc_quality = `${raw.doc_quality || ''} ${notes}`.trim();
-  return { ...normalise(raw, paragraphs, { forceLow }), mode: 'live' };
+  return { ...normalise(raw, paragraphs, { forceLow }), mode: `live-${PROVIDER}` };
 }
 
 export { tagged };

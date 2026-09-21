@@ -12,7 +12,7 @@ const existing = (await api('GET', '/contracts')).data;
 if (existing.length) { console.log(`Workspace already has ${existing.length} contracts; nothing to do.`); process.exit(0); }
 
 async function load(file) {
-  const form = new FormData(); form.append('file', new Blob([fs.readFileSync(path.join('samples', file))], { type: 'application/pdf' }), file);
+  const form = new FormData(); form.append('file', new Blob([fs.readFileSync(path.join('public', 'samples', file))], { type: 'application/pdf' }), file);
   const up = await api('POST', '/contracts', { form });
   for (let i = 0; i < 40; i++) { const d = (await api('GET', `/contracts/${up.data.id}`)).data; if (d.contract.status !== 'processing') return d; await new Promise((x) => setTimeout(x, 250)); }
   throw new Error('timeout ' + file);

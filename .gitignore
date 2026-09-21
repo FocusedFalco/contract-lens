@@ -1,6 +1,7 @@
-!.env.example
 .DS_Store
+node_modules/
+data/
+.claude/
 .env
 .env.*
-data/
-node_modules/
+!.env.example
