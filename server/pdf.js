@@ -1,4 +1,3 @@
-import { PDFParse } from 'pdf-parse';
 
 /** @typedef {{id: string, page: number, clause: string|null, text: string}} Paragraph */
 
@@ -7,12 +6,22 @@ const HEADING = /^[A-Z][A-Z0-9 \-&,'’:/().]{3,80}$/;
 const PAGE_FOOTER = /^--\s*\d+\s+of\s+\d+\s*--$/i;
 
 export async function pdfPageTexts(buffer) {
-  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  // unpdf ships a serverless-safe build of pdf.js (no native canvas, no DOM), so it runs on Vercel.
+  // Loaded on demand so a problem here can only break PDF reading, not the whole API.
+  const { getDocumentProxy } = await import('unpdf');
+  const pdf = await getDocumentProxy(new Uint8Array(buffer));
   try {
-    const res = await parser.getText();
-    return res.pages.map((p) => ({ page: p.num, text: p.text }));
+    const pages = [];
+    for (let n = 1; n <= pdf.numPages; n++) {
+      const content = await (await pdf.getPage(n)).getTextContent();
+      let text = '';
+      for (const item of content.items) { text += item.str; if (item.hasEOL) text += '\n'; }
+      pages.push({ page: n, text });
+    }
+    return pages;
   } finally {
-    await parser.destroy();
+    await pdf.cleanup?.().catch(() => {});
+    await pdf.destroy?.().catch?.(() => {});
   }
 }
 
