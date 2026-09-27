@@ -20,6 +20,14 @@ function toast(msg, err) {
 const modal = (html) => { $('#modal-root').innerHTML = `<div class="modal-back" data-act="modal-bg"><div class="modal" role="dialog" aria-modal="true">${html}</div></div>`; };
 const closeModal = () => { $('#modal-root').innerHTML = ''; };
 
+// Page lifecycle: a page registers one cleanup function (via onCleanup) for any global listener/timer/observer
+// it sets up (i.e. anything NOT scoped to a DOM node inside #app, which is discarded for free on the next render).
+// route() runs and clears it before rendering the next page, so nothing accumulates across navigations.
+let pageCleanup = null;
+const onCleanup = (fn) => { pageCleanup = fn; };
+const runCleanup = () => { if (pageCleanup) { try { pageCleanup(); } catch { /* ignore */ } pageCleanup = null; } };
+const skeleton = (label = 'Loading…') => `<div class="card empty"><div class="spinner"></div><strong>${esc(label)}</strong></div>`;
+
 const FIELD_LABELS = { parties: 'Parties', effective_date: 'Effective date', expiration_date: 'Expiration date', renewal_terms: 'Renewal terms', payment_terms: 'Payment terms', termination_conditions: 'Termination conditions', service_obligations: 'Service obligations' };
 const FLAG_LABELS = { auto_renewal: 'Auto-renewal', unilateral_termination: 'Unilateral termination', penalty: 'Penalty', indemnity: 'Indemnity / liability', other: 'Other risk' };
 const STATUS = { processing: ['Reading…', 'neutral'], failed: ['Failed', 'low'], pending_review: ['Needs review', 'medium'], active: ['Active', 'high'], expired: ['Expired', 'neutral'], archived: ['Archived', 'neutral'] };
@@ -73,7 +81,7 @@ async function refreshNotifs() { try { state.notifs = (await api('GET', '/dashbo
 
 // ------------------------------------------------------------------ router
 async function route() {
-  clearInterval(state.timer);
+  runCleanup(); // stop the previous page's timers/listeners/observers before rendering the next one
   closeModal();
   document.body.classList.remove('landing', 'menu-open'); document.documentElement.classList.remove('entrance', 'entrance-s2', 'hero-ready');
   const h = location.hash.replace(/^#/, '') || '/';
@@ -178,15 +186,22 @@ function initLanding() {
   burger.onclick = () => setMenu(burger.getAttribute('aria-expanded') !== 'true');
   document.querySelectorAll('.lp [data-scroll]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); setMenu(false); document.getElementById(a.dataset.scroll)?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth' }); }));
   ov.querySelectorAll('a:not([data-scroll])').forEach((a) => a.addEventListener('click', () => setMenu(false)));
-  const esc2 = (e) => { if (e.key === 'Escape') setMenu(false); }; document.addEventListener('keydown', esc2);
-  addEventListener('resize', () => { if (innerWidth > 1024) setMenu(false); });
-  if (reduce) { root.classList.add('hero-ready'); return; }
+  // These two are attached to document/window, which outlive this page's DOM — without an explicit removal they'd
+  // pile up (one more of each) every time the landing page is (re)visited. Everything else here lives on nodes
+  // inside #app and is discarded for free when the next page overwrites it.
+  const onEsc = (e) => { if (e.key === 'Escape') setMenu(false); };
+  const onResize = () => { if (innerWidth > 1024) setMenu(false); };
+  document.addEventListener('keydown', onEsc);
+  addEventListener('resize', onResize);
+  const timers = [];
+  const cleanupBase = () => { document.removeEventListener('keydown', onEsc); removeEventListener('resize', onResize); timers.forEach(clearTimeout); };
+  if (reduce) { root.classList.add('hero-ready'); onCleanup(cleanupBase); return; }
 
   // entrance choreography (Web Animations API)
   const REVEAL = 'cubic-bezier(0.16, 1, 0.3, 1)', LIFT = 'cubic-bezier(0.22, 1, 0.36, 1)';
   root.classList.add('entrance', 'entrance-s2');
-  setTimeout(() => root.classList.remove('entrance'), 3500);
-  setTimeout(() => { if (root.classList.contains('entrance-s2') && !document.getElementById('panel')?.getAnimations().length) { const r = document.getElementById('panel')?.getBoundingClientRect(); if (r && r.top < innerHeight) root.classList.remove('entrance-s2'); } }, 6000); // failsafe
+  timers.push(setTimeout(() => root.classList.remove('entrance'), 3500));
+  timers.push(setTimeout(() => { if (root.classList.contains('entrance-s2') && !document.getElementById('panel')?.getAnimations().length) { const r = document.getElementById('panel')?.getBoundingClientRect(); if (r && r.top < innerHeight) root.classList.remove('entrance-s2'); } }, 6000)); // failsafe
   const anims = []; // hero animations only; later sections clean up after themselves
   const A = (el, kf, o) => { if (!el) return; const an = el.animate(kf, { fill: 'both', ...o }); anims.push(an); return an; };
   // Later sections: when an animation finishes, drop its inline start state and cancel it (the natural CSS is the end state).
@@ -204,7 +219,7 @@ function initLanding() {
     lift(q('.ph'), 10, 0.78, 0.55); lift(q('.controls > *:not(.grow)'), 10, 0.84, 0.5, 0.055);
     A($('.composer-glow'), [{ clipPath: 'inset(0 40% 0 40%)', opacity: 0 }, { clipPath: 'inset(0 0% 0 0%)', opacity: 0.95 }], { duration: 800, delay: 940, easing: REVEAL });
     lift(q('.proto'), 12, 1.08, 0.6);
-    setTimeout(() => { anims.forEach((a) => { try { a.cancel(); } catch { /* ignore */ } }); root.classList.remove('entrance'); root.classList.add('hero-ready'); }, 2000);
+    timers.push(setTimeout(() => { anims.forEach((a) => { try { a.cancel(); } catch { /* ignore */ } }); root.classList.remove('entrance'); root.classList.add('hero-ready'); }, 2000));
   };
   (document.fonts?.ready ? Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 400))]) : Promise.resolve()).then(play);
 
@@ -217,10 +232,14 @@ function initLanding() {
   io.observe($('#panel'));
   const io2 = new IntersectionObserver((ents) => ents.forEach((e) => { if (e.isIntersecting) { io2.unobserve(e.target); A2(e.target, [{ opacity: 0, transform: 'translateY(18px)' }, { opacity: 1, transform: 'none' }], { duration: 700, easing: LIFT }); } }), { rootMargin: '0px 0px -10% 0px' });
   q('.s3 .lp-h2, .s3 .lcard').forEach((el) => { el.style.opacity = 0; io2.observe(el); });
+  // If the visitor leaves before scrolling this far, these observers would otherwise keep watching
+  // (now-detached) elements indefinitely; disconnect them alongside the listeners/timers above.
+  onCleanup(() => { cleanupBase(); io.disconnect(); io2.disconnect(); });
 }
 
 // ------------------------------------------------------------------ dashboard
 async function pageDashboard() {
+  app.innerHTML = `<div class="page-head"><h1>Dashboard</h1></div>${skeleton('Loading your dashboard…')}`; // instant shell, painted before the fetch below
   const d = await api('GET', '/dashboard');
   state.notifs = d.notifications; renderTop();
   const c = d.counts;
@@ -252,6 +271,10 @@ async function pageDashboard() {
 
 // ------------------------------------------------------------------ contracts list
 async function pageContracts() {
+  // Static shell (title, upload button, search/filter) paints immediately; only #clist waits on the fetch below.
+  app.innerHTML = `<div class="page-head"><h1>Contracts</h1><a class="btn primary" href="#/upload">Upload contract</a></div>
+    <div class="row wrap" style="margin-bottom:12px"><input id="q" placeholder="Search title or vendor…" style="max-width:280px" aria-label="Search" disabled><select id="st" style="max-width:180px" aria-label="Status" disabled><option value="">All statuses</option>${Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select></div>
+    <div class="card" id="clist">${skeleton('Loading contracts…')}</div>`;
   const rows = await api('GET', '/contracts');
   const render = () => {
     const q = ($('#q')?.value || '').toLowerCase(), st = $('#st')?.value || '';
@@ -262,10 +285,7 @@ async function pageContracts() {
         <td>${r.open_flags ? `<span class="badge medium">⚑ ${r.open_flags}</span>` : '—'}${r.low_fields && r.status === 'pending_review' ? ` <span class="badge low">○ ${r.low_fields} low</span>` : ''}</td></tr>`).join('')}</tbody></table>`
       : '<div class="empty">No contracts match.</div>';
   };
-  app.innerHTML = `<div class="page-head"><h1>Contracts</h1><a class="btn primary" href="#/upload">Upload contract</a></div>
-    <div class="row wrap" style="margin-bottom:12px"><input id="q" placeholder="Search title or vendor…" style="max-width:280px" aria-label="Search"><select id="st" style="max-width:180px" aria-label="Status"><option value="">All statuses</option>${Object.entries(STATUS).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select></div>
-    <div class="card" id="clist"></div>`;
-  render(); $('#q').oninput = render; $('#st').onchange = render;
+  render(); $('#q').disabled = false; $('#st').disabled = false; $('#q').oninput = render; $('#st').onchange = render;
 }
 
 // ------------------------------------------------------------------ upload
@@ -307,12 +327,14 @@ async function uploadFiles(files) {
 
 // ------------------------------------------------------------------ vendors
 async function pageVendors() {
+  app.innerHTML = `<div class="page-head"><h1>Vendors</h1></div>${skeleton('Loading vendors…')}`;
   const vs = await api('GET', '/vendors');
   app.innerHTML = `<div class="page-head"><div><h1>Vendors</h1><div class="muted">Every counterparty and their contract history.</div></div></div>
     <div class="card">${vs.length ? `<table class="responsive"><thead><tr><th>Vendor</th><th>Also known as</th><th>Contracts</th><th>Active</th><th>Next expiry</th></tr></thead><tbody>
       ${vs.map((v) => `<tr><td><a href="#/vendor/${v.id}"><strong>${esc(v.canonical_name)}</strong></a></td><td class="small muted">${esc(v.aliases.join(', ')) || '—'}</td><td>${v.contract_count}</td><td>${v.active_count || 0}</td><td>${v.next_expiry ? fmtDate(v.next_expiry) + ' · ' + daysChip(v.next_expiry_days) : '—'}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No vendors yet. They are created when you confirm a contract.</div>'}</div>`;
 }
 async function pageVendor(id) {
+  app.innerHTML = `<div class="page-head"><a class="small" href="#/vendors">← Vendors</a></div>${skeleton('Loading vendor…')}`;
   const v = await api('GET', '/vendors/' + id);
   app.innerHTML = `<div class="page-head"><div><a class="small" href="#/vendors">← Vendors</a><h1>${esc(v.canonical_name)}</h1>${v.aliases.length ? `<div class="small muted">Also written as: ${esc(v.aliases.join(', '))}</div>` : ''}</div></div>
     <h2>Contract history <span class="muted small">(oldest first)</span></h2>
@@ -332,11 +354,13 @@ const changed = (n) => !sameJ(ed.vals[n], ed.d.fields.find((f) => f.field_name =
 const fieldDone = (f) => f.confidence === 'high' || ed.ackF.has(f.field_name) || changed(f.field_name);
 
 async function pageContract(id) {
+  app.innerHTML = skeleton('Loading contract…'); // instant shell, painted before the fetch below
   const d = await api('GET', '/contracts/' + id);
   const c = d.contract;
   if (c.status === 'processing') {
     app.innerHTML = `<div class="card empty"><div class="spinner"></div><strong>Reading your contract…</strong><div class="small">Extracting terms, flagging risky clauses, writing a summary.</div></div>`;
     state.timer = setInterval(async () => { const x = await api('GET', '/contracts/' + id).catch(() => null); if (x && x.contract.status !== 'processing') { clearInterval(state.timer); route(); } }, 1000);
+    onCleanup(() => clearInterval(state.timer)); // stopped as soon as the visitor navigates elsewhere, not just when it resolves
     return;
   }
   if (c.status === 'failed') {
@@ -344,8 +368,9 @@ async function pageContract(id) {
       <p><a class="btn" href="#/upload">Back to upload</a> <button class="danger" data-act="delete" data-id="${c.id}">Delete this upload</button></p>`;
     return;
   }
-  const chat = await api('GET', `/contracts/${id}/chat`);
-  state.vendors = await api('GET', '/vendors');
+  // Independent of each other (and of the contract fetch above): run together instead of one after another.
+  const [chat, vendors] = await Promise.all([api('GET', `/contracts/${id}/chat`), api('GET', '/vendors')]);
+  state.vendors = vendors;
   const pending = c.status === 'pending_review';
   const best = d.vendor_candidates[0];
   let vendor = d.vendor ? { id: d.vendor.id, name: d.vendor.canonical_name } : { id: null, name: c.suggested_vendor || '' };
