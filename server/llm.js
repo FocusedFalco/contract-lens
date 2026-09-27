@@ -65,17 +65,34 @@ async function viaGemini({ system, context, messages, media, schema, what = 'res
     systemInstruction: { parts: [{ text: context ? `${system}\n\n${context}` : system }] }, contents,
     generationConfig: { responseMimeType: 'application/json', responseSchema: toGeminiSchema(schema), temperature: 0.1, maxOutputTokens: 16000 },
   });
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
-
-  let data;
-  for (let attempt = 0; ; attempt++) {
-    const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': key }, body, signal: AbortSignal.timeout(55000) });
-    data = await res.json().catch(() => null);
-    if (res.ok) break;
-    if ([429, 500, 503].includes(res.status) && attempt < 3) { await new Promise((r) => setTimeout(r, 2000 * (attempt + 1))); continue; } // transient overload
-    const hint = res.status === 400 || res.status === 403 ? ' Check that GEMINI_API_KEY is a valid Google AI Studio key.' : '';
-    throw new Error(`Gemini API error ${res.status}: ${data?.error?.message || res.statusText}.${hint}`);
+  // Google's models are sometimes overloaded (503/429). Try the primary model, then fall back to others, within one overall
+  // time budget (Vercel functions stop at 60s). Override the fallbacks with CL_GEMINI_FALLBACKS="model-a,model-b".
+  const fallbacks = (process.env.CL_GEMINI_FALLBACKS ?? 'gemini-3.6-flash,gemini-3.1-flash-lite').split(',').map((m) => m.trim()).filter(Boolean);
+  const models = [MODEL, ...fallbacks.filter((m) => m !== MODEL)];
+  const deadline = Date.now() + 50000;
+  let data, lastErr;
+  outer: for (const model of models) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const left = deadline - Date.now();
+      if (left < 4000) break outer;
+      let res;
+      try { res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': key }, body, signal: AbortSignal.timeout(Math.min(left, 40000)) }); }
+      catch (e) { lastErr = `${model}: ${e.name === 'TimeoutError' ? 'timed out' : e.message}`; break; } // try the next model
+      data = await res.json().catch(() => null);
+      if (res.ok) break outer;
+      const msg = data?.error?.message || res.statusText;
+      if ([429, 500, 503, 404].includes(res.status)) { // overloaded or retired model: retry once, then move on
+        lastErr = `${model}: ${res.status} ${msg}`; data = null;
+        if (res.status === 404) break;
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 1500));
+        continue;
+      }
+      const hint = res.status === 400 || res.status === 403 ? ' Check that GEMINI_API_KEY is a valid Google AI Studio key.' : '';
+      throw new Error(`Gemini API error ${res.status}: ${msg}.${hint}`);
+    }
   }
+  if (!data) throw new Error(`Gemini is busy right now, so this ${what} could not be completed. Please try again in a minute. (${String(lastErr).slice(0, 160)})`);
   const cand = data.candidates?.[0];
   if (!cand) throw new Error(`Gemini returned no answer for this ${what}${data.promptFeedback?.blockReason ? ` (blocked: ${data.promptFeedback.blockReason})` : ''}.`);
   if (cand.finishReason === 'MAX_TOKENS') throw new Error(`The ${what} was too long for one response (max tokens reached).`);

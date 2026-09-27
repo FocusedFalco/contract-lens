@@ -44,6 +44,12 @@ app.post('/api/unlock', (req, res) => {
   res.setHeader('Set-Cookie', `cl_gate=${gateToken()}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secure}`);
   res.json({ ok: true });
 });
+// "Sign out": clears the access-code cookie so this browser is asked for the code again (useful on a shared computer).
+app.post('/api/lock', (req, res) => {
+  const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `cl_gate=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
+  res.json({ ok: true });
+});
 app.use('/api', (req, res, next) => (unlocked(req) ? next() : next(httpError(401, 'Access code required.', { gate: true }))));
 
 // ------------------------------------------------------------------ single open workspace
@@ -53,7 +59,7 @@ app.use('/api', (req, res, next) => { req.ctx = WORKSPACE; next(); });
 const vendorMode = (ctx) => getSetting(`vendor_mode:user:${ctx.user.id}`, 'manual');
 
 app.get('/api/session', wrap(async (req, res) => {
-  res.json({ mode: MODE, provider: MODE === 'live' ? PROVIDER : null, model: MODE === 'live' ? MODEL : null, settings: { vendor_mode: await vendorMode(req.ctx), alert_windows: await alertWindows(req.ctx.ownerKey) } });
+  res.json({ mode: MODE, provider: MODE === 'live' ? PROVIDER : null, model: MODE === 'live' ? MODEL : null, gated: !!GATE, settings: { vendor_mode: await vendorMode(req.ctx), alert_windows: await alertWindows(req.ctx.ownerKey) } });
 }));
 
 app.put('/api/settings', wrap(async (req, res) => {
@@ -104,15 +110,20 @@ async function loadFlags(id, paragraphs) {
 }
 
 async function regulatoryMatches(ownerKey, onlyContractId = null) {
-  const regs = await q('SELECT * FROM regulation_update ORDER BY published DESC');
-  const contracts = (await q("SELECT id, title FROM contract WHERE owner_key = ? AND contract_type = 'regulatory_class' AND status IN ('active','expired','pending_review')", [ownerKey]))
-    .filter((c) => onlyContractId == null || c.id === onlyContractId);
-  const texts = {};
-  for (const c of contracts) texts[c.id] = ((await one("SELECT string_agg(text, ' ') AS t FROM paragraph WHERE contract_id = ?", [c.id])).t || '').toLowerCase();
+  const [regs, contracts] = await Promise.all([
+    q('SELECT * FROM regulation_update ORDER BY published DESC'),
+    q("SELECT id, title FROM contract WHERE owner_key = ? AND contract_type = 'regulatory_class' AND status IN ('active','expired','pending_review')", [ownerKey]),
+  ]);
+  const wanted = contracts.filter((c) => onlyContractId == null || c.id === onlyContractId);
+  if (!regs.length || !wanted.length) return [];
+  // One query for every contract's text, not one round trip per contract.
+  const rows = await q(`SELECT contract_id, string_agg(text, ' ') AS t FROM paragraph WHERE contract_id IN (${wanted.map(() => '?').join(',')}) GROUP BY contract_id`, wanted.map((c) => c.id));
+  const texts = Object.fromEntries(rows.map((r) => [r.contract_id, (r.t || '').toLowerCase()]));
+  const contractsForMap = wanted;
   return regs.map((r) => {
     const kws = unj(r.keywords);
-    const affected = contracts.map((c) => {
-      const matched = kws.filter((k) => texts[c.id].includes(k));
+    const affected = contractsForMap.map((c) => {
+      const matched = kws.filter((k) => (texts[c.id] || '').includes(k));
       return matched.length ? { id: c.id, title: c.title, matched_keywords: matched } : null;
     }).filter(Boolean);
     return { id: r.id, title: r.title, authority: r.authority, summary: r.summary, published: r.published, effective: r.effective, affected };
@@ -173,14 +184,18 @@ app.get('/api/contracts', wrap(async (req, res) => {
 app.get('/api/contracts/:id', wrap(async (req, res) => {
   await refreshStatuses();
   const c = await ownContract(req, req.params.id);
-  const paragraphs = await loadParagraphs(c.id);
-  const vendor = c.vendor_id ? await one('SELECT id, canonical_name FROM vendor WHERE id = ?', [c.vendor_id]) : null;
+  const [paragraphs, vendor, fields, vmode, regulatory_alerts] = await Promise.all([
+    loadParagraphs(c.id),
+    c.vendor_id ? one('SELECT id, canonical_name FROM vendor WHERE id = ?', [c.vendor_id]) : null,
+    loadFields(c.id),
+    vendorMode(req.ctx),
+    regulatoryMatches(req.ctx.ownerKey, c.id),
+  ]);
   const lookup = vendor?.canonical_name || c.suggested_vendor || '';
+  const [flags, vendor_candidates] = await Promise.all([loadFlags(c.id, paragraphs), lookup ? matchVendors(req.ctx.ownerKey, lookup, 0.5) : []]);
   res.json({
-    contract: { ...c, days_left: daysUntil(c.expiration_date) }, vendor, vendor_candidates: lookup ? await matchVendors(req.ctx.ownerKey, lookup, 0.5) : [],
-    vendor_mode: await vendorMode(req.ctx), auto_threshold: AUTO_THRESHOLD,
-    fields: await loadFields(c.id), flags: await loadFlags(c.id, paragraphs), paragraphs,
-    regulatory_alerts: await regulatoryMatches(req.ctx.ownerKey, c.id),
+    contract: { ...c, days_left: daysUntil(c.expiration_date) }, vendor, vendor_candidates,
+    vendor_mode: vmode, auto_threshold: AUTO_THRESHOLD, fields, flags, paragraphs, regulatory_alerts,
   });
 }));
 
@@ -360,14 +375,15 @@ app.get('/api/vendors/:id', wrap(async (req, res) => {
 // ------------------------------------------------------------------ dashboard / reminders
 app.get('/api/dashboard', wrap(async (req, res) => {
   const { ownerKey } = req.ctx;
-  await runReminders(); // serverless hosts have no background timer, so reminders are also checked on load
-  const counts = Object.fromEntries((await q('SELECT status, COUNT(*)::int AS n FROM contract WHERE owner_key = ? GROUP BY status', [ownerKey])).map((r) => [r.status, r.n]));
-  res.json({
-    expiring: await expiringContracts(ownerKey), counts,
-    pending: await q("SELECT id, title, uploaded_at FROM contract WHERE owner_key = ? AND status = 'pending_review' ORDER BY uploaded_at DESC", [ownerKey]),
-    notifications: await q('SELECT id, contract_id, message, window_days, created_at, read FROM notification WHERE owner_key = ? ORDER BY id DESC LIMIT 20', [ownerKey]),
-    windows: await alertWindows(ownerKey), regulatory_changes: await regulatoryMatches(ownerKey),
-  });
+  await runReminders(); // serverless hosts have no background timer, so reminders are also checked on load; also refreshes statuses
+  const [countRows, expiring, pending, notifications, windows, regulatory_changes] = await Promise.all([
+    q('SELECT status, COUNT(*)::int AS n FROM contract WHERE owner_key = ? GROUP BY status', [ownerKey]),
+    expiringContracts(ownerKey, { skipRefresh: true }),
+    q("SELECT id, title, uploaded_at FROM contract WHERE owner_key = ? AND status = 'pending_review' ORDER BY uploaded_at DESC", [ownerKey]),
+    q('SELECT id, contract_id, message, window_days, created_at, read FROM notification WHERE owner_key = ? ORDER BY id DESC LIMIT 20', [ownerKey]),
+    alertWindows(ownerKey), regulatoryMatches(ownerKey),
+  ]);
+  res.json({ expiring, counts: Object.fromEntries(countRows.map((r) => [r.status, r.n])), pending, notifications, windows, regulatory_changes });
 }));
 
 app.post('/api/reminders/run', wrap(async (req, res) => {
