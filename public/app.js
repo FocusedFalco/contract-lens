@@ -552,7 +552,10 @@ document.addEventListener('click', async (e) => {
     else if (a === 'read-all') { await api('POST', '/notifications/read-all'); await refreshNotifs(); renderBell(); $('#bell-pop').classList.remove('hidden'); }
     else if (a === 'run-reminders') { const r = await api('POST', '/reminders/run'); toast(r.created ? `${r.created} new reminder(s) sent` : 'No new reminders due'); route(); }
     else if (a === 'settings') settingsModal();
-    else if (a === 'signout') { await api('POST', '/lock'); state.session = null; state.gated = true; toast('Signed out'); pageGate(); }
+    else if (a === 'signout') {
+      await api('POST', '/lock'); state.session = null; state.gated = true; toast('Signed out');
+      if (location.hash === '#/') route(); else location.hash = '#/'; // -> landing page; the gate only appears once they try to re-enter
+    }
     else if (a === 'save-settings') {
       const windows = $('#aw').value.split(/[ ,]+/).filter(Boolean).map(Number);
       const body = { vendor_mode: $('input[name=vm]:checked').value }; body.alert_windows = windows;
