@@ -14,6 +14,7 @@ npm start                # http://localhost:3210
 |---|---|
 | `GEMINI_API_KEY` **or** `ANTHROPIC_API_KEY` | Turns on **live** extraction and chat for any contract (Gemini is used first if both are set; `CL_PROVIDER` forces one). Without a key the app runs in **offline demo mode**: only the four sample PDFs work, replayed from pre-computed results. |
 | `CL_GEMINI_MODEL` | Default `gemini-flash-latest` (an alias for the current Flash model). Claude default: `claude-opus-5` via `CL_MODEL`. |
+| `CL_WEB_SEARCH` | Chatbot only, Gemini only, off by default. Set to `true` to let the chatbot use live Google Search for questions the contract can't answer (e.g. "is this penalty typical?"), clearly labelled apart from the contract's own citations. Needs Search Grounding billing enabled on the Google Cloud project — a paid, per-request feature. Without it every attempt fails and the chatbot silently falls back to its normal contract-only answer, so it's always safe to leave on. |
 | `DATABASE_URL` | A Postgres connection string (Supabase, Neon…). Blank = an embedded local Postgres (PGlite) in `./data/pglite`. |
 | `ACCESS_PASSWORD` | There are no accounts. If set, visitors must enter this code once. **Set it on any public deployment.** |
 | `ALERT_WEBHOOK_URL` | Optional: POST active reminders to a webhook. |
@@ -39,7 +40,7 @@ Open the app → **Get started**. Upload a file from **Upload → Try a sample**
 |---|---|
 | Extraction, confidence, citations | `server/extract.js` (schema-constrained output from `server/llm.js`; citations validated against real paragraph IDs) |
 | Mandatory review | `POST /api/contracts/:id/confirm` in `server/app.js` refuses to activate until every low/medium field and every flag is acknowledged |
-| Chat with citations, explicit uncertainty | `server/chat.js` (invalid citations dropped; low confidence forces "I'm not certain:") |
+| Chat with citations, explicit uncertainty | `server/chat.js` (invalid citations dropped; low confidence forces "I'm not certain:"). Optional live web search (`CL_WEB_SEARCH=true`, Gemini only) adds a clearly separate `web_citations` source for questions the contract itself can't answer — see `server/llm.js`'s `generateJsonWithWebSearch`. |
 | Vendor resolution, manual/automatic chain | `server/vendors.js` + confirm flow; mode is a setting |
 | Alerts: passive + active | `server/alerts.js` (dashboard computed on load; notifications fire once per window) |
 | Regulatory change | **Mocked**: 2 seeded records keyword-matched to `regulatory_class` contracts |

@@ -475,8 +475,10 @@ function drawSide() {
 }
 function drawMsgs() {
   const el = $('#msgs'); if (!el) return;
+  // "citations" = this contract (📎, jumps to the source panel); "web_citations" = live search, when enabled
+  // server-side (🌐, opens the source) — kept visually and textually distinct per the source-attribution rule.
   el.innerHTML = ed.chat.map((m) => m.role === 'user' ? `<div class="msg user">${esc(m.content)}</div>` : `<div class="msg assistant">${esc(m.content)}
-    <div class="meta">${m.confidence ? confBadge(m.confidence) : ''}${(m.citations || []).map((c) => `<button class="cite" data-act="cite" data-ids="${c.para_id}">📎 ${esc(c.label || c.para_id)}</button>`).join('')}</div>
+    <div class="meta">${m.confidence ? confBadge(m.confidence) : ''}${(m.citations || []).map((c) => `<button class="cite" data-act="cite" data-ids="${c.para_id}">📎 ${esc(c.label || c.para_id)}</button>`).join('')}${(m.web_citations || []).map((c) => `<a class="cite" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer" title="External source">🌐 ${esc(c.title)}</a>`).join('')}</div>
     ${m.confidence === 'low' ? '<div class="tiny" style="margin-top:6px;color:var(--low)">Low confidence — check the cited clause yourself.</div>' : ''}
     ${(m.citations || []).slice(0, 2).map((c) => `<div class="quote">“${esc((c.quote || '').slice(0, 200))}”</div>`).join('')}</div>`).join('') + (ed.busy ? '<div class="msg assistant muted">Reading the contract…</div>' : '');
   el.scrollTop = el.scrollHeight;
@@ -484,7 +486,7 @@ function drawMsgs() {
 async function ask(q) {
   if (ed.busy) return;
   ed.chat.push({ role: 'user', content: q }); ed.busy = true; drawSide();
-  try { const r = await api('POST', `/contracts/${ed.d.contract.id}/chat`, { question: q }); ed.chat.push({ role: 'assistant', content: r.content, citations: r.citations, confidence: r.confidence }); }
+  try { const r = await api('POST', `/contracts/${ed.d.contract.id}/chat`, { question: q }); ed.chat.push({ role: 'assistant', content: r.content, citations: r.citations, web_citations: r.web_citations, confidence: r.confidence }); }
   catch (e) { ed.chat.push({ role: 'assistant', content: `Sorry, that failed: ${e.message}`, confidence: 'low', citations: [] }); }
   ed.busy = false; drawSide();
 }

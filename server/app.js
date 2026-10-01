@@ -309,10 +309,13 @@ app.post('/api/contracts/:id/confirm', wrap(async (req, res) => {
 }));
 
 // ------------------------------------------------------------------ chat (single contract)
+// cited_sources stores {citations, web_citations}; a plain array means an older row from before web_citations existed.
+const unpackSources = (raw) => { const v = unj(raw); return Array.isArray(v) ? { citations: v, web_citations: [] } : { citations: v?.citations || [], web_citations: v?.web_citations || [] }; };
+
 app.get('/api/contracts/:id/chat', wrap(async (req, res) => {
   const c = await ownContract(req, req.params.id);
   const rows = await q('SELECT * FROM chat_message WHERE contract_id = ? AND user_id = ? ORDER BY id', [c.id, req.ctx.user.id]);
-  res.json(rows.map((m) => ({ id: m.id, role: m.role, content: m.content, citations: unj(m.cited_sources) || [], confidence: m.confidence, created_at: m.created_at })));
+  res.json(rows.map((m) => ({ id: m.id, role: m.role, content: m.content, ...unpackSources(m.cited_sources), confidence: m.confidence, created_at: m.created_at })));
 }));
 
 app.post('/api/contracts/:id/chat', wrap(async (req, res) => {
@@ -333,8 +336,8 @@ app.post('/api/contracts/:id/chat', wrap(async (req, res) => {
   }
   const ins = 'INSERT INTO chat_message (contract_id, user_id, role, content, cited_sources, confidence, created_at) VALUES (?,?,?,?,?,?,?)';
   await q(ins, [c.id, req.ctx.user.id, 'user', question, '[]', null, now()]);
-  await q(ins, [c.id, req.ctx.user.id, 'assistant', out.answer, j(out.citations), out.confidence, now()]);
-  res.json({ role: 'assistant', content: out.answer, citations: out.citations, confidence: out.confidence, mode: out.mode });
+  await q(ins, [c.id, req.ctx.user.id, 'assistant', out.answer, j({ citations: out.citations, web_citations: out.web_citations }), out.confidence, now()]);
+  res.json({ role: 'assistant', content: out.answer, citations: out.citations, web_citations: out.web_citations, confidence: out.confidence, mode: out.mode });
 }));
 
 app.delete('/api/contracts/:id/chat', wrap(async (req, res) => {

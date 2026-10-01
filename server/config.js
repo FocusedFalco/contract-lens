@@ -17,5 +17,11 @@ export const MODEL = PROVIDER === 'gemini' ? process.env.CL_GEMINI_MODEL || 'gem
 // "live" calls the provider; "offline" replays pre-computed fixtures (keyed by file sha256) so a demo
 // never depends on the network. CL_MODE forces one; otherwise live iff a provider key is present.
 export const MODE = process.env.CL_MODE || (PROVIDER ? 'live' : 'offline');
+
+// Chat only, Gemini only, off by default (see server/chat.js): lets the chatbot use live Google Search for
+// questions the contract itself can't answer. Requires a Google Cloud project with Search Grounding billing
+// enabled (it is a paid, per-request feature, separate from normal Gemini usage) — without it, every call
+// fails and the chatbot automatically falls back to its normal contract-only answers.
+export const WEB_SEARCH = process.env.CL_WEB_SEARCH === 'true';
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 export const DEFAULT_ALERT_WINDOWS = [30, 15, 7];

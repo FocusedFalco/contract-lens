@@ -1,5 +1,5 @@
-import { MODE, PROVIDER } from './config.js';
-import { generateJson } from './llm.js';
+import { MODE, PROVIDER, WEB_SEARCH } from './config.js';
+import { generateJson, generateJsonWithWebSearch } from './llm.js';
 import { tagged } from './extract.js';
 import { refLabel } from './pdf.js';
 
@@ -42,6 +42,19 @@ Rules:
 - Confidence: "high" = the text answers the question directly. "medium" = the answer needs some inference or combines several clauses. "low" = the text is ambiguous, incomplete, refers to a document not provided, or you are unsure. When confidence is "low", begin the answer with "I'm not certain:" and explain what is unclear.
 - Fields marked as user-confirmed are values the user checked and corrected; prefer them if they conflict with your reading, and say so.
 - Be concise (under 150 words), in plain language. You are not a lawyer: for decisions with real money or legal consequences, add one short sentence suggesting a professional review.`;
+
+// Web-search-enabled variant (CL_WEB_SEARCH=true, Gemini only — see generateJsonWithWebSearch in llm.js). The
+// model gets a live Google Search tool alongside the contract text and decides per-question whether to use it;
+// "citations" (contract paragraphs) keeps its existing meaning and validation below, "web_citations" is
+// attached separately, from Gemini's own grounding metadata, after the call — see answerQuestion.
+const CHAT_SYSTEM_WEB = `${CHAT_SYSTEM}
+
+You also have live Google Search available as a tool. Decide per question whether you need it:
+- Purely about what this contract says (a date, a fee, a clause): answer from the contract only. Do not search.
+- About current events, rates, regulations, or general/public information the contract can't contain: search, and ground your answer in what you find.
+- Comparing or combining the two (e.g. "is this penalty normal?", "has this regulation changed since the contract was signed?"): use both, and say which is which — e.g. "According to the contract... / A current web search found...". Never blend a web fact into a sentence about what the contract says without marking it as external.
+- If the contract and a search result conflict about what THIS CONTRACT itself says or requires, the contract's own text is authoritative; mention the external information as context, not as a correction to the contract.
+- If neither the contract nor a search gives you enough to answer, set answerable to false and reply exactly: "I cannot find sufficient information within internal documents or external data to answer this completely."`;
 
 const fieldText = (fields) => fields.map((f) => `- ${f.field_name}: ${JSON.stringify(f.value)} (confidence: ${f.confidence}${f.corrected ? ', user-confirmed correction' : ''})`).join('\n');
 
@@ -123,12 +136,23 @@ export async function answerQuestion({ question, paragraphs, fields, flags, hist
       }
       ctx = paragraphs.filter((p) => picked.has(p.id));
     }
-    out = await generateJson({
-      system: CHAT_SYSTEM, schema: CHAT_SCHEMA, effort: 'low', what: 'answer',
-      context: `<reviewed_fields>\n${fieldText(fields)}\n</reviewed_fields>\n\n<contract>\n${tagged(ctx)}\n</contract>`,
-      messages: [...history.slice(-6).map((m) => ({ role: m.role, content: m.content })), { role: 'user', content: question }],
-    });
-    mode = `live-${PROVIDER}`;
+    const context = `<reviewed_fields>\n${fieldText(fields)}\n</reviewed_fields>\n\n<contract>\n${tagged(ctx)}\n</contract>`;
+    const msgs = [...history.slice(-6).map((m) => ({ role: m.role, content: m.content })), { role: 'user', content: question }];
+
+    if (WEB_SEARCH && PROVIDER === 'gemini') {
+      try {
+        out = await generateJsonWithWebSearch({ system: CHAT_SYSTEM_WEB, schema: CHAT_SCHEMA, what: 'answer', context, messages: msgs });
+        mode = out.searched ? `live-${PROVIDER}-web` : `live-${PROVIDER}`;
+      } catch (e) {
+        // Most commonly: the Google Cloud project has no (or no paid) Search Grounding quota — see config.js.
+        // Never let that take the chatbot down; fall straight back to the proven contract-only path below.
+        console.warn('web-search chat call failed, falling back to contract-only:', e.message);
+      }
+    }
+    if (!out) {
+      out = await generateJson({ system: CHAT_SYSTEM, schema: CHAT_SCHEMA, effort: 'low', what: 'answer', context, messages: msgs });
+      mode = `live-${PROVIDER}`;
+    }
   }
 
   // Enforce the non-negotiables regardless of what the model returned.
@@ -139,12 +163,18 @@ export async function answerQuestion({ question, paragraphs, fields, flags, hist
     const quoteOk = c.quote && norm(p.text).includes(norm(c.quote).replace(/…$/, ''));
     return { para_id: c.para_id, label: refLabel(p), page: p.page, quote: quoteOk ? c.quote : p.text.slice(0, 220) };
   });
+  // External sources (if any): attached by generateJsonWithWebSearch from Gemini's own grounding metadata, not
+  // asked of the model, so there is nothing to validate against — just sanity-check the shape.
+  const webCitations = (out.web_citations || [])
+    .filter((c) => c && typeof c.url === 'string' && c.url)
+    .map((c) => ({ title: String(c.title || 'Web source').slice(0, 200), url: c.url }))
+    .slice(0, 6);
   let { answer, confidence } = out;
   if (!LEVELS.includes(confidence)) confidence = 'low';
-  if (out.answerable && citations.length === 0) {
+  if (out.answerable && citations.length === 0 && webCitations.length === 0) {
     confidence = 'low';
-    answer = `I'm not certain: I couldn't tie this answer to a specific clause. ${answer.replace(/^I'm not certain:\s*/i, '')}`;
+    answer = `I'm not certain: I couldn't tie this answer to a specific clause${webCitations.length === 0 && mode.endsWith('-web') ? ' or a web source' : ''}. ${answer.replace(/^I'm not certain:\s*/i, '')}`;
   }
   if (confidence === 'low' && !/^I'm not certain/i.test(answer)) answer = `I'm not certain: ${answer}`;
-  return { answer, confidence, citations, mode };
+  return { answer, confidence, citations, web_citations: webCitations, mode };
 }

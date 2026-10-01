@@ -54,17 +54,17 @@ export function toGeminiSchema(s) {
   return out;
 }
 
-async function viaGemini({ system, context, messages, media, schema, what = 'response' }) {
-  const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-  const contents = startWithUser(messages).map((m, i, all) => {
+function geminiContents({ messages, media }) {
+  return startWithUser(messages).map((m, i, all) => {
     const parts = [{ text: m.content }];
     if (media && i === all.length - 1 && m.role === 'user') parts.unshift({ inlineData: { mimeType: media.mime, data: media.base64 } });
     return { role: m.role === 'assistant' ? 'model' : 'user', parts };
   });
-  const body = JSON.stringify({
-    systemInstruction: { parts: [{ text: context ? `${system}\n\n${context}` : system }] }, contents,
-    generationConfig: { responseMimeType: 'application/json', responseSchema: toGeminiSchema(schema), temperature: 0.1, maxOutputTokens: 16000 },
-  });
+}
+
+/** POST one Gemini request body, with retry + fallback across models within one time budget. Returns the first candidate. */
+async function fetchGeminiCandidate(body, what) {
+  const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   // Google's models are sometimes overloaded (503/429). Try the primary model, then fall back to others, within one overall
   // time budget (Vercel functions stop at 60s). Override the fallbacks with CL_GEMINI_FALLBACKS="model-a,model-b".
   const fallbacks = (process.env.CL_GEMINI_FALLBACKS ?? 'gemini-3.6-flash,gemini-3.1-flash-lite').split(',').map((m) => m.trim()).filter(Boolean);
@@ -82,21 +82,57 @@ async function viaGemini({ system, context, messages, media, schema, what = 'res
       data = await res.json().catch(() => null);
       if (res.ok) break outer;
       const msg = data?.error?.message || res.statusText;
-      if ([429, 500, 503, 404].includes(res.status)) { // overloaded or retired model: retry once, then move on
+      if ([429, 500, 503, 404].includes(res.status)) { // overloaded, quota-exhausted, or retired model: retry once, then move on
         lastErr = `${model}: ${res.status} ${msg}`; data = null;
         if (res.status === 404) break;
         if (attempt === 0) await new Promise((r) => setTimeout(r, 1500));
         continue;
       }
       const hint = res.status === 400 || res.status === 403 ? ' Check that GEMINI_API_KEY is a valid Google AI Studio key.' : '';
-      throw new Error(`Gemini API error ${res.status}: ${msg}.${hint}`);
+      const e = new Error(`Gemini API error ${res.status}: ${msg}.${hint}`); e.status = res.status; throw e;
     }
   }
-  if (!data) throw new Error(`Gemini is busy right now, so this ${what} could not be completed. Please try again in a minute. (${String(lastErr).slice(0, 160)})`);
+  if (!data) { const e = new Error(`Gemini is busy right now, so this ${what} could not be completed. Please try again in a minute. (${String(lastErr).slice(0, 160)})`); e.status = 429; throw e; }
   const cand = data.candidates?.[0];
   if (!cand) throw new Error(`Gemini returned no answer for this ${what}${data.promptFeedback?.blockReason ? ` (blocked: ${data.promptFeedback.blockReason})` : ''}.`);
   if (cand.finishReason === 'MAX_TOKENS') throw new Error(`The ${what} was too long for one response (max tokens reached).`);
+  return cand;
+}
+
+function geminiJsonText(cand, what) {
   const text = (cand.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || '').join('');
   if (!text) throw new Error(`Gemini returned an empty ${what}${cand.finishReason ? ` (${cand.finishReason})` : ''}.`);
   try { return JSON.parse(text); } catch { throw new Error(`Gemini returned malformed JSON for this ${what}. Try again.`); }
+}
+
+async function viaGemini({ system, context, messages, media, schema, what = 'response' }) {
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: context ? `${system}\n\n${context}` : system }] }, contents: geminiContents({ messages, media }),
+    generationConfig: { responseMimeType: 'application/json', responseSchema: toGeminiSchema(schema), temperature: 0.1, maxOutputTokens: 16000 },
+  });
+  return geminiJsonText(await fetchGeminiCandidate(body, what), what);
+}
+
+/**
+ * Gemini only, and only when CL_WEB_SEARCH=true (see server/chat.js): same as viaGemini, but also gives the
+ * model Google's live search tool (`google_search`) and asks for structured JSON in the same call, so the
+ * model decides per-question whether it needs to search — no separate classifier. Requires a Google Cloud
+ * project with Search Grounding billing enabled; without it every call here fails (typically 429
+ * RESOURCE_EXHAUSTED) and the caller is expected to fall back to the plain `generateJson`/`viaGemini` path.
+ * Grounding sources, if any, come back as `web_citations` on the parsed result (not validated against the
+ * contract's paragraphs — that's the caller's job for the `citations` field; these are external by nature).
+ */
+export async function generateJsonWithWebSearch({ system, context, messages, schema, what = 'response' }) {
+  if (PROVIDER !== 'gemini') throw new Error('Web search is only implemented for the Gemini provider.');
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: context ? `${system}\n\n${context}` : system }] }, contents: geminiContents({ messages }),
+    tools: [{ google_search: {} }],
+    generationConfig: { responseMimeType: 'application/json', responseSchema: toGeminiSchema(schema), temperature: 0.1, maxOutputTokens: 16000 },
+  });
+  const cand = await fetchGeminiCandidate(body, what);
+  const parsed = geminiJsonText(cand, what);
+  const chunks = cand.groundingMetadata?.groundingChunks || [];
+  parsed.web_citations = chunks.map((c) => ({ title: c.web?.title || c.web?.uri || 'Web source', url: c.web?.uri || null })).filter((c) => c.url).slice(0, 6);
+  parsed.searched = !!cand.groundingMetadata;
+  return parsed;
 }
