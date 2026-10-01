@@ -2,8 +2,9 @@ import Anthropic from '@anthropic-ai/sdk';
 import { PROVIDER, MODEL } from './config.js';
 
 // One entry point for "give me JSON matching this schema" so extraction and chat work with either provider.
-//   generateJson({ system, context?, messages, media?, schema, effort?, what? }) -> parsed object
+//   generateJson({ system, context?, messages, media?, schema, effort?, what?, purpose? }) -> parsed object
 //   messages: [{ role: 'user'|'assistant', content }]   media: { mime, base64 } attached to the last user message
+//   purpose: 'extract' (default) or 'chat' — Gemini only, picks which API key to use (see resolveGeminiKey)
 let _anthropic;
 const anthropic = () => (_anthropic ??= new Anthropic());
 
@@ -62,9 +63,18 @@ function geminiContents({ messages, media }) {
   });
 }
 
+// Two call sites, two optional keys: extraction/vision (reading the uploaded document) always uses
+// GEMINI_API_KEY; chat can use a separate GEMINI_CHAT_API_KEY (falling back to GEMINI_API_KEY if unset, so a
+// single-key setup keeps working unchanged).
+const KEY_VAR = { extract: 'GEMINI_API_KEY', chat: 'GEMINI_CHAT_API_KEY' };
+function resolveGeminiKey(purpose) {
+  if (purpose === 'chat' && process.env.GEMINI_CHAT_API_KEY) return process.env.GEMINI_CHAT_API_KEY;
+  return process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+}
+
 /** POST one Gemini request body, with retry + fallback across models within one time budget. Returns the first candidate. */
-async function fetchGeminiCandidate(body, what) {
-  const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+async function fetchGeminiCandidate(body, what, purpose) {
+  const key = resolveGeminiKey(purpose);
   // Google's models are sometimes overloaded (503/429). Try the primary model, then fall back to others, within one overall
   // time budget (Vercel functions stop at 60s). Override the fallbacks with CL_GEMINI_FALLBACKS="model-a,model-b".
   const fallbacks = (process.env.CL_GEMINI_FALLBACKS ?? 'gemini-3.6-flash,gemini-3.1-flash-lite').split(',').map((m) => m.trim()).filter(Boolean);
@@ -88,7 +98,7 @@ async function fetchGeminiCandidate(body, what) {
         if (attempt === 0) await new Promise((r) => setTimeout(r, 1500));
         continue;
       }
-      const hint = res.status === 400 || res.status === 403 ? ' Check that GEMINI_API_KEY is a valid Google AI Studio key.' : '';
+      const hint = res.status === 400 || res.status === 403 ? ` Check that ${KEY_VAR[purpose] || 'GEMINI_API_KEY'} is a valid Google AI Studio key.` : '';
       const e = new Error(`Gemini API error ${res.status}: ${msg}.${hint}`); e.status = res.status; throw e;
     }
   }
@@ -105,12 +115,12 @@ function geminiJsonText(cand, what) {
   try { return JSON.parse(text); } catch { throw new Error(`Gemini returned malformed JSON for this ${what}. Try again.`); }
 }
 
-async function viaGemini({ system, context, messages, media, schema, what = 'response' }) {
+async function viaGemini({ system, context, messages, media, schema, what = 'response', purpose = 'extract' }) {
   const body = JSON.stringify({
     systemInstruction: { parts: [{ text: context ? `${system}\n\n${context}` : system }] }, contents: geminiContents({ messages, media }),
     generationConfig: { responseMimeType: 'application/json', responseSchema: toGeminiSchema(schema), temperature: 0.1, maxOutputTokens: 16000 },
   });
-  return geminiJsonText(await fetchGeminiCandidate(body, what), what);
+  return geminiJsonText(await fetchGeminiCandidate(body, what, purpose), what);
 }
 
 /**
@@ -129,7 +139,7 @@ export async function generateJsonWithWebSearch({ system, context, messages, sch
     tools: [{ google_search: {} }],
     generationConfig: { responseMimeType: 'application/json', responseSchema: toGeminiSchema(schema), temperature: 0.1, maxOutputTokens: 16000 },
   });
-  const cand = await fetchGeminiCandidate(body, what);
+  const cand = await fetchGeminiCandidate(body, what, 'chat'); // always the chat key — this path only exists for chat.js
   const parsed = geminiJsonText(cand, what);
   const chunks = cand.groundingMetadata?.groundingChunks || [];
   parsed.web_citations = chunks.map((c) => ({ title: c.web?.title || c.web?.uri || 'Web source', url: c.web?.uri || null })).filter((c) => c.url).slice(0, 6);

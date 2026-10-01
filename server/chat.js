@@ -150,7 +150,7 @@ export async function answerQuestion({ question, paragraphs, fields, flags, hist
       }
     }
     if (!out) {
-      out = await generateJson({ system: CHAT_SYSTEM, schema: CHAT_SCHEMA, effort: 'low', what: 'answer', context, messages: msgs });
+      out = await generateJson({ system: CHAT_SYSTEM, schema: CHAT_SCHEMA, effort: 'low', what: 'answer', context, messages: msgs, purpose: 'chat' });
       mode = `live-${PROVIDER}`;
     }
   }

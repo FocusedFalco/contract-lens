@@ -13,6 +13,7 @@ npm start                # http://localhost:3210
 | Setting (`.env`) | What it does |
 |---|---|
 | `GEMINI_API_KEY` **or** `ANTHROPIC_API_KEY` | Turns on **live** extraction and chat for any contract (Gemini is used first if both are set; `CL_PROVIDER` forces one). Without a key the app runs in **offline demo mode**: only the four sample PDFs work, replayed from pre-computed results. |
+| `GEMINI_CHAT_API_KEY` | Optional. A separate Gemini key used only by the chatbot (e.g. separate quota/billing from extraction). `GEMINI_API_KEY` always reads/extracts the document; chat uses this one if set, else falls back to `GEMINI_API_KEY` too. |
 | `CL_GEMINI_MODEL` | Default `gemini-flash-latest` (an alias for the current Flash model). Claude default: `claude-opus-5` via `CL_MODEL`. |
 | `CL_WEB_SEARCH` | Chatbot only, Gemini only, off by default. Set to `true` to let the chatbot use live Google Search for questions the contract can't answer (e.g. "is this penalty typical?"), clearly labelled apart from the contract's own citations. Needs Search Grounding billing enabled on the Google Cloud project — a paid, per-request feature. Without it every attempt fails and the chatbot silently falls back to its normal contract-only answer, so it's always safe to leave on. |
 | `DATABASE_URL` | A Postgres connection string (Supabase, Neon…). Blank = an embedded local Postgres (PGlite) in `./data/pglite`. |
