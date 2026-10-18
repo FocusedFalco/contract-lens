@@ -6,9 +6,9 @@ export default async function handler(req, res) {
     app ??= (await import('../server/app.js')).default;
     return app(req, res);
   } catch (e) {
-    console.error('ContractLens failed to start:', e);
+    console.error('ContractLens failed to start:', e.message); // full detail stays in the Vercel log
     res.statusCode = 500;
     res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ error: `Server failed to start: ${e.message}` }));
+    res.end(JSON.stringify({ error: 'Server failed to start. Check the deployment logs.' }));
   }
 }

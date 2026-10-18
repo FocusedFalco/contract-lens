@@ -23,7 +23,7 @@
       "rationale": "Named in the preamble."
     },
     "effective_date": {
-      "value": "2024-07-12",
+      "value": "2024-08-04",
       "confidence": "high",
       "refs": [
         "P1.3"
@@ -31,7 +31,7 @@
       "rationale": "Start date stated."
     },
     "expiration_date": {
-      "value": "2025-07-12",
+      "value": "2025-08-04",
       "confidence": "high",
       "refs": [
         "P1.3"

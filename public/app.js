@@ -58,9 +58,9 @@ function renderTop() {
     <a class="brand" href="#/dashboard">${logoMark()}ContractLens</a>
     <nav aria-label="Main">
       <a href="#/dashboard" class="${hash === '#/dashboard' ? 'active' : ''}">Dashboard</a>
+      <a href="#/upload" class="${act('#/upload')}">Upload</a>
       <a href="#/contracts" class="${act('#/contracts')}${hash.startsWith('#/contract/') ? ' active' : ''}">Contracts</a>
       <a href="#/vendors" class="${act('#/vendor')}">Vendors</a>
-      <a href="#/upload" class="${act('#/upload')}">Upload</a>
     </nav>
     <span class="spacer"></span>
     <span class="mode ${s.mode}" title="${s.mode === 'live' ? 'Using ' + esc(s.provider) + ' (' + esc(s.model) + ')' : 'No AI key: replays pre-computed results for the sample files'}">${s.mode === 'live' ? 'Live · ' + (s.provider === 'gemini' ? 'Gemini' : 'Claude') : 'Offline demo'}</span>
@@ -244,7 +244,7 @@ async function pageDashboard() {
   state.notifs = d.notifications; renderTop();
   const c = d.counts;
   app.innerHTML = `
-    <div class="page-head"><div><h1>Dashboard</h1><div class="muted">Reminder windows: ${d.windows.join(' / ')} days</div></div>
+    <div class="page-head"><div><h1>Dashboard</h1></div>
       <a class="btn primary" href="#/upload">Upload contract</a></div>
     <div class="grid cols-3" style="margin-bottom:16px">
       <a class="card stat" href="#/contracts" style="text-decoration:none"><span class="muted">Active contracts</span><span class="n">${c.active || 0}</span></a>
@@ -256,16 +256,6 @@ async function pageDashboard() {
       ${d.expiring.length ? `<table class="responsive"><thead><tr><th>Contract</th><th>Vendor</th><th>Expires</th><th>Time left</th><th>Window</th></tr></thead><tbody>
         ${d.expiring.map((e) => `<tr><td><a href="#/contract/${e.id}">${esc(e.title)}</a></td><td>${e.vendor_id ? `<a href="#/vendor/${e.vendor_id}">${esc(e.vendor_name)}</a>` : '—'}</td><td>${fmtDate(e.expiration_date)}</td><td>${daysChip(e.days_left)}</td><td>${e.window ? `<span class="badge ${e.window <= 7 ? 'low' : e.window <= 15 ? 'medium' : 'neutral'}">within ${e.window}d</span>` : '<span class="badge neutral">expired</span>'}</td></tr>`).join('')}</tbody></table>`
         : '<div class="empty">Nothing expires inside your reminder window. 🎉</div>'}
-    </div>
-    <div class="grid cols-2">
-      <div class="card"><div class="row between"><h2>Reminder notifications <span class="muted small">(active)</span></h2><button data-act="run-reminders" class="small">Run check now</button></div>
-        ${d.notifications.length ? d.notifications.slice(0, 6).map((n) => `<div style="padding:6px 0;border-bottom:1px solid var(--border)"><a href="#/contract/${n.contract_id}">${esc(n.message)}</a></div>`).join('') : '<div class="empty small">No reminders sent yet. They fire once per contract when it enters a window.</div>'}
-        <p class="tiny muted" style="margin-bottom:0">Delivered in-app and appended to <code>data/outbox.log</code> (email stand-in). Set <code>ALERT_WEBHOOK_URL</code> to also POST to a webhook.</p></div>
-      <div class="card"><h2>Regulatory changes <span class="badge medium">DEMO · mocked</span></h2>
-        ${d.regulatory_changes.length ? d.regulatory_changes.map((r) => `<div style="margin-bottom:12px"><strong>${esc(r.title)}</strong><div class="tiny muted">${esc(r.authority)} · effective ${fmtDate(r.effective)}</div><div class="small">${esc(r.summary)}</div>
-          <div class="small" style="margin-top:4px">Affects: ${r.affected.map((a) => `<a href="#/contract/${a.id}">${esc(a.title)}</a> <span class="tiny muted">(matched: ${esc(a.matched_keywords.join(', '))})</span>`).join(', ')}</div></div>`).join('')
-          : '<div class="empty small">No stored regulatory-class contracts are affected by the seeded demo updates.</div>'}
-        <p class="tiny muted" style="margin-bottom:0">Seeded fake records mapped by keyword. No live government monitoring.</p></div>
     </div>`;
 }
 
@@ -336,13 +326,15 @@ async function pageVendors() {
 async function pageVendor(id) {
   app.innerHTML = `<div class="page-head"><a class="small" href="#/vendors">← Vendors</a></div>${skeleton('Loading vendor…')}`;
   const v = await api('GET', '/vendors/' + id);
-  app.innerHTML = `<div class="page-head"><div><a class="small" href="#/vendors">← Vendors</a><h1>${esc(v.canonical_name)}</h1>${v.aliases.length ? `<div class="small muted">Also written as: ${esc(v.aliases.join(', '))}</div>` : ''}</div></div>
-    <h2>Contract history <span class="muted small">(oldest first)</span></h2>
-    <div class="timeline">${v.contracts.map((c) => `<div class="tl-item ${c.status === 'expired' ? 'expired' : ''}"><div class="card">
+  const card = (c) => `<div class="tl-item ${c.status === 'expired' ? 'expired' : ''}"><div class="card">
       <div class="row between wrap"><a href="#/contract/${c.id}"><strong>${esc(c.title)}</strong></a><span>${statusBadge(c.status)} ${c.open_flags ? `<span class="badge medium">⚑ ${c.open_flags}</span>` : ''}</span></div>
-      <div class="small muted">${fmtDate(c.effective_date)} → ${fmtDate(c.expiration_date)} ${c.days_left != null && c.status === 'active' ? '· ' + daysChip(c.days_left) : ''} · ${TYPES[c.contract_type]}</div>
+      <div class="small muted">${fmtDate(c.effective_date)} → ${fmtDate(c.expiration_date)} ${c.days_left != null && c.status === 'active' ? '· ' + daysChip(c.days_left) : ''}</div>
       ${c.payment_terms ? `<div class="small" style="margin-top:4px">${c.payment_terms.amount != null ? esc(`${c.payment_terms.currency || ''} ${Number(c.payment_terms.amount).toLocaleString('en-US')} · ${c.payment_terms.recurrence}`) : 'Amount not stated · ' + esc(c.payment_terms.recurrence)}</div>` : ''}
-      <p class="small" style="margin:6px 0 0">${esc((c.summary_text || '').slice(0, 220))}${(c.summary_text || '').length > 220 ? '…' : ''}</p></div></div>`).join('') || '<div class="empty">No confirmed contracts for this vendor yet.</div>'}</div>`;
+      <p class="small" style="margin:6px 0 0">${esc((c.summary_text || '').slice(0, 220))}${(c.summary_text || '').length > 220 ? '…' : ''}</p></div></div>`;
+  const groups = Object.keys(TYPES).map((k) => [k, v.contracts.filter((c) => c.contract_type === k)]).filter(([, l]) => l.length);
+  app.innerHTML = `<div class="page-head"><div><a class="small" href="#/vendors">← Vendors</a><h1>${esc(v.canonical_name)}</h1>${v.aliases.length ? `<div class="small muted">Also written as: ${esc(v.aliases.join(', '))}</div>` : ''}</div>
+      <div class="row"><button data-act="rename-vendor" data-id="${id}" data-name="${esc(v.canonical_name)}">Rename</button><button class="danger" data-act="delete-vendor" data-id="${id}" data-name="${esc(v.canonical_name)}" data-n="${v.contracts.length}">Remove contractor</button></div></div>
+    ${groups.map(([k, l]) => `<h2>${TYPES[k]} contracts <span class="muted small">(${l.length}, oldest first)</span></h2><div class="timeline" style="margin-bottom:20px">${l.map(card).join('')}</div>`).join('') || '<div class="empty">No confirmed contracts for this vendor yet.</div>'}`;
 }
 
 // ------------------------------------------------------------------ contract page (review / detail / source / chat)
@@ -351,7 +343,11 @@ const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
 const sameJ = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 const canEdit = () => ed.editing;
 const changed = (n) => !sameJ(ed.vals[n], ed.d.fields.find((f) => f.field_name === n).value);
-const fieldDone = (f) => f.confidence === 'high' || ed.ackF.has(f.field_name) || changed(f.field_name);
+// Confidence is self-reported by the AI, so expiry date and payment terms always need an explicit check
+// (keep REVIEW_ALWAYS in sync with server/app.js).
+const REVIEW_ALWAYS = new Set(['expiration_date', 'payment_terms']);
+const needsAck = (f) => f.confidence !== 'high' || REVIEW_ALWAYS.has(f.field_name);
+const fieldDone = (f) => !needsAck(f) || ed.ackF.has(f.field_name) || changed(f.field_name);
 
 async function pageContract(id) {
   app.innerHTML = skeleton('Loading contract…'); // instant shell, painted before the fetch below
@@ -405,7 +401,7 @@ function fieldEditor(name, v) {
 }
 function citeChips(ids) {
   const byId = Object.fromEntries(ed.d.paragraphs.map((p) => [p.id, p]));
-  return ids.length ? ids.map((i) => byId[i] ? `<button class="cite" data-act="cite" data-ids="${i}" title="Show source text">📎 ${esc(refLabel(byId[i]))}</button>` : '').join(' ') : '<span class="tiny muted">no source found</span>';
+  return ids.length ? ids.map((i) => byId[i] ? `<button class="cite" data-act="cite" data-ids="${esc(i)}" title="Show source text">📎 ${esc(refLabel(byId[i]))}</button>` : '').join(' ') : '<span class="tiny muted">no source found</span>';
 }
 
 function drawContract() {
@@ -418,7 +414,7 @@ function drawContract() {
       <div class="small muted">${esc(c.file_name)} · uploaded ${new Date(c.uploaded_at).toLocaleDateString()} · ${String(c.extraction_mode).startsWith('live') ? 'read by ' + (c.extraction_mode.endsWith('gemini') ? 'Gemini' : 'Claude') : 'offline demo extraction'} ·
         <a href="/api/contracts/${c.id}/file" target="_blank" rel="noopener">open original file</a></div></div>
       <div class="row">${write && !pending && !ed.editing ? '<button data-act="edit">Edit details</button>' : ''}${write ? `<button class="danger" data-act="delete" data-id="${c.id}">Delete</button>` : ''}</div></div>
-    ${pending ? `<div class="banner info" style="margin-bottom:12px"><strong>Review required.</strong> Nothing is saved as active until you have checked every ${CONF.low[0]} low/${CONF.medium[0]} medium-confidence field and every ⚑ flagged clause below.${!write ? ' Your role (Viewer) cannot confirm.' : ''}</div>` : ''}
+    ${pending ? `<div class="banner info" style="margin-bottom:12px"><strong>Review required.</strong> Nothing is saved as active until you have checked every ${CONF.low[0]} low/${CONF.medium[0]} medium-confidence field, your expiry date and payment terms, and every ⚑ flagged clause below.${!write ? ' Your role (Viewer) cannot confirm.' : ''}</div>` : ''}
     ${c.status === 'expired' ? `<div class="banner warn" style="margin-bottom:12px">This contract expired on ${fmtDate(c.expiration_date)}.</div>` : ''}
     ${!clean && c.doc_quality ? `<div class="banner warn" style="margin-bottom:12px"><strong>Document quality:</strong> ${esc(c.doc_quality)}</div>` : ''}
     ${d.regulatory_alerts.map((r) => `<div class="banner warn" style="margin-bottom:12px"><span class="badge medium">DEMO · mocked</span> <strong>${esc(r.title)}</strong> (${esc(r.authority)}, effective ${fmtDate(r.effective)}) may affect this contract: ${esc(r.summary)}</div>`).join('')}
@@ -438,7 +434,7 @@ function drawContract() {
 
       <div class="stack"><h2 style="margin:0">⚑ Clauses to review (${d.flags.length})</h2>
         ${d.flags.map((f) => `<div class="flag ${ed.resolved[f.id] && !pending ? 'done' : ''}"><div class="row between wrap"><span class="type">${FLAG_LABELS[f.flag_type] || f.flag_type}</span>
-          ${f.source ? `<button class="cite" data-act="cite" data-ids="${f.source.id}">📎 ${esc(f.source.label)}</button>` : '<span class="tiny muted">source not located</span>'}</div>
+          ${f.source ? `<button class="cite" data-act="cite" data-ids="${esc(f.source.id)}">📎 ${esc(f.source.label)}</button>` : '<span class="tiny muted">source not located</span>'}</div>
           <div style="margin:6px 0">${esc(f.description)}</div>${f.source ? `<div class="quote">“${esc(f.source.text.slice(0, 260))}${f.source.text.length > 260 ? '…' : ''}”</div>` : ''}
           ${edit && pending ? `<label class="check" style="margin-top:8px"><input type="checkbox" data-act="ack-flag" data-id="${f.id}" ${ed.ackFl.has(f.id) ? 'checked' : ''}> I've read this clause</label>` : ''}
           ${edit && !pending ? `<label class="check" style="margin-top:8px"><input type="checkbox" data-act="resolve-flag" data-id="${f.id}" ${ed.resolved[f.id] ? 'checked' : ''}> Mark as dealt with</label>` : ''}</div>`).join('') || '<div class="card empty small">No risky clauses were flagged.</div>'}</div>
@@ -446,7 +442,7 @@ function drawContract() {
       <div class="stack"><h2 style="margin:0">Extracted terms <span class="muted small">(least certain first)</span></h2>
         ${d.fields.map((f) => `<div class="field ${f.confidence}" id="field-${f.field_name}"><div class="row between wrap"><span class="label">${FIELD_LABELS[f.field_name]}</span>${confBadge(f.confidence)}</div>
           <div class="val">${edit ? fieldEditor(f.field_name, ed.vals[f.field_name]) : fieldView(f.field_name, ed.vals[f.field_name])}</div>
-          <div class="row wrap between"><div>${citeChips(f.source_refs)}</div>${edit && pending && f.confidence !== 'high' ? `<label class="check"><input type="checkbox" data-act="ack-field" data-name="${f.field_name}" ${fieldDone(f) ? 'checked' : ''}> I've checked this</label>` : ''}</div>
+          <div class="row wrap between"><div>${citeChips(f.source_refs)}</div>${edit && pending && needsAck(f) ? `<label class="check"><input type="checkbox" data-act="ack-field" data-name="${f.field_name}" ${fieldDone(f) ? 'checked' : ''}> I've checked this</label>` : ''}</div>
           ${f.rationale ? `<div class="rationale" style="margin-top:6px">${esc(f.rationale)}</div>` : ''}
           ${f.was_corrected ? `<div class="orig">Corrected by a person. Original extraction: ${fieldView(f.field_name, f.extracted_value).replace(/<[^>]+>/g, ' ')}</div>` : ''}</div>`).join('')}</div>
 
@@ -461,7 +457,7 @@ function drawContract() {
 function drawSide() {
   const body = $('#side-body'); if (!body) return;
   if (ed.tab === 'source') {
-    body.innerHTML = `<div class="src-list">${ed.d.paragraphs.map((p) => isHeading(p) ? `<div class="para heading" id="${pid(p.id)}">${esc(p.text)}</div>` : `<div class="para ${ed.hl.has(p.id) ? 'hl' : ''}" id="${pid(p.id)}"><span class="pid">${esc(refLabel(p))}</span>${esc(p.text)}</div>`).join('')}</div>`;
+    body.innerHTML = `<div class="src-list">${ed.d.paragraphs.map((p) => isHeading(p) ? `<div class="para heading" id="${esc(pid(p.id))}">${esc(p.text)}</div>` : `<div class="para ${ed.hl.has(p.id) ? 'hl' : ''}" id="${esc(pid(p.id))}"><span class="pid">${esc(refLabel(p))}</span>${esc(p.text)}</div>`).join('')}</div>`;
     const first = [...ed.hl][0]; if (first) $('#' + pid(first))?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     return;
   }
@@ -478,7 +474,7 @@ function drawMsgs() {
   // "citations" = this contract (📎, jumps to the source panel); "web_citations" = live search, when enabled
   // server-side (🌐, opens the source) — kept visually and textually distinct per the source-attribution rule.
   el.innerHTML = ed.chat.map((m) => m.role === 'user' ? `<div class="msg user">${esc(m.content)}</div>` : `<div class="msg assistant">${esc(m.content)}
-    <div class="meta">${m.confidence ? confBadge(m.confidence) : ''}${(m.citations || []).map((c) => `<button class="cite" data-act="cite" data-ids="${c.para_id}">📎 ${esc(c.label || c.para_id)}</button>`).join('')}${(m.web_citations || []).map((c) => `<a class="cite" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer" title="External source">🌐 ${esc(c.title)}</a>`).join('')}</div>
+    <div class="meta">${m.confidence ? confBadge(m.confidence) : ''}${(m.citations || []).map((c) => `<button class="cite" data-act="cite" data-ids="${esc(c.para_id)}">📎 ${esc(c.label || c.para_id)}</button>`).join('')}${(m.web_citations || []).map((c) => `<a class="cite" href="${esc(c.url)}" target="_blank" rel="noopener noreferrer" title="External source">🌐 ${esc(c.title)}</a>`).join('')}</div>
     ${m.confidence === 'low' ? '<div class="tiny" style="margin-top:6px;color:var(--low)">Low confidence — check the cited clause yourself.</div>' : ''}
     ${(m.citations || []).slice(0, 2).map((c) => `<div class="quote">“${esc((c.quote || '').slice(0, 200))}”</div>`).join('')}</div>`).join('') + (ed.busy ? '<div class="msg assistant muted">Reading the contract…</div>' : '');
   el.scrollTop = el.scrollHeight;
@@ -492,7 +488,7 @@ async function ask(q) {
 }
 
 function progress() {
-  const need = ed.d.fields.filter((f) => f.confidence !== 'high'), doneF = need.filter(fieldDone).length;
+  const need = ed.d.fields.filter(needsAck), doneF = need.filter(fieldDone).length;
   const doneFl = ed.d.flags.filter((f) => ed.ackFl.has(f.id)).length;
   return { total: need.length + ed.d.flags.length, done: doneF + doneFl };
 }
@@ -564,6 +560,8 @@ document.addEventListener('click', async (e) => {
       await api('PUT', '/settings', body); await loadSession(); closeModal(); toast('Settings saved'); route();
     }
     else if (a === 'sample') { t.disabled = true; const blob = await (await fetch('/samples/' + t.dataset.file)).blob(); await uploadFiles([new File([blob], t.dataset.file, { type: 'application/pdf' })]); t.disabled = false; }
+    else if (a === 'rename-vendor') { const n = prompt('Contractor name', t.dataset.name); if (n && n.trim() && n.trim() !== t.dataset.name) { await api('PATCH', '/vendors/' + t.dataset.id, { name: n.trim() }); toast('Renamed'); route(); } }
+    else if (a === 'delete-vendor') { if (confirm(`Remove "${t.dataset.name}" and all ${t.dataset.n} confirmed contract(s) under it, plus any drafts? This cannot be undone.`)) { const r = await api('DELETE', '/vendors/' + t.dataset.id); toast(`Removed contractor and ${r.contracts_removed} contract(s)`); location.hash = '#/vendors'; } }
     else if (a === 'delete') { if (confirm('Delete this contract and its file? This cannot be undone.')) { await api('DELETE', '/contracts/' + t.dataset.id); toast('Deleted'); location.hash = '#/contracts'; } }
     // contract page
     else if (a === 'edit') { ed.editing = true; drawContract(); }

@@ -23,7 +23,7 @@ for (const [file, vendor] of plan) {
   const d = await load(file);
   if (!vendor) { console.log(`• ${d.contract.title}: left pending review`); continue; }
   const body = { title: d.contract.title, contract_type: d.contract.contract_type, vendor: { name: vendor },
-    acknowledged_fields: d.fields.filter((f) => f.confidence !== 'high').map((f) => f.field_name), acknowledged_flags: d.flags.map((f) => f.id) };
+    acknowledged_fields: d.fields.map((f) => f.field_name), acknowledged_flags: d.flags.map((f) => f.id) };
   let c = await api('POST', `/contracts/${d.contract.id}/confirm`, { body });
   if (c.status === 409 && c.data?.needs_vendor_decision) c = await api('POST', `/contracts/${d.contract.id}/confirm`, { body: { ...body, vendor_decision: 'merge', merge_id: c.data.candidates[0].id } });
   console.log(`• ${d.contract.title}: ${c.status === 200 ? 'active' : 'FAILED ' + JSON.stringify(c.data)}`);

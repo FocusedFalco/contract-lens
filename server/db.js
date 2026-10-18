@@ -18,8 +18,15 @@ async function makeDriver() {
   if (url) {
     const { default: pg } = await import('pg');
     const local = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
-    // max: 3 keeps serverless instances from exhausting the pooler; Supabase requires TLS.
-    const pool = new pg.Pool({ connectionString: url, max: 3, idleTimeoutMillis: 10000, ssl: local ? false : { rejectUnauthorized: false } });
+    // TLS: Supabase's certificate chain is signed by its own CA, which system trust stores don't include, so verification
+    // needs that CA. Set DATABASE_CA to Supabase's CA certificate (Dashboard → Database → SSL Configuration, PEM; "\n" escapes
+    // are accepted) to verify the server and block man-in-the-middle attacks. Without it the link is still encrypted
+    // but the server's identity isn't checked.
+    const ca = process.env.DATABASE_CA?.replace(/\\n/g, '\n');
+    if (!local && !ca) console.warn('DATABASE_CA is not set: the database connection is encrypted but the server certificate is not verified.');
+    const ssl = local ? false : ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: false };
+    // max: 3 keeps serverless instances from exhausting the pooler.
+    const pool = new pg.Pool({ connectionString: url, max: 3, idleTimeoutMillis: 10000, ssl });
     const run = async (sql, params) => (await pool.query(sql, params)).rows;
     return {
       kind: 'postgres', ...bind(run), exec: (sql) => pool.query(sql),
@@ -90,7 +97,31 @@ CREATE TABLE IF NOT EXISTS regulation_update (
 );
 CREATE INDEX IF NOT EXISTS idx_contract_owner ON contract(owner_key, status);
 CREATE INDEX IF NOT EXISTS idx_contract_vendor ON contract(vendor_id);
+-- Chat history is private to a browser session (cookie), not shared by everyone who can open the workspace.
+ALTER TABLE chat_message ADD COLUMN IF NOT EXISTS session_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_message(contract_id, session_id);
+-- Shared request counters for rate limiting (in-memory counters don't work across serverless instances).
+CREATE TABLE IF NOT EXISTS rate_limit (k TEXT PRIMARY KEY, n INTEGER NOT NULL, reset_at BIGINT NOT NULL);
 `;
+
+// Supabase publishes every table in the `public` schema through an HTTP "Data API" that anyone holding the
+// project's (public-by-design) `anon` key can call. This app talks to Postgres directly as the table owner
+// (BYPASSRLS), never through that API, so we switch Row-Level Security on with NO policies (deny-all for the
+// API roles) and revoke their table grants. Idempotent: only touches tables that still need it, so it takes no
+// locks on a cold start once everything is locked down. No-op on embedded PGlite (no such roles).
+const LOCK_DOWN_DATA_API = `
+DO $$ DECLARE r record; has_anon boolean; has_auth boolean; BEGIN
+  SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') INTO has_anon;
+  SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') INTO has_auth;
+  FOR r IN SELECT c.relname AS t, c.relrowsecurity AS rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'public' AND c.relkind = 'r' LOOP
+    IF NOT r.rls THEN EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', r.t); END IF;
+    IF has_anon AND has_table_privilege('anon', format('public.%I', r.t), 'SELECT,INSERT,UPDATE,DELETE') THEN
+      EXECUTE format('REVOKE ALL ON public.%I FROM anon', r.t); END IF;
+    IF has_auth AND has_table_privilege('authenticated', format('public.%I', r.t), 'SELECT,INSERT,UPDATE,DELETE') THEN
+      EXECUTE format('REVOKE ALL ON public.%I FROM authenticated', r.t); END IF;
+  END LOOP;
+END $$;`;
 
 export const now = () => new Date().toISOString();
 export const j = (v) => JSON.stringify(v ?? null);
@@ -124,6 +155,7 @@ async function seed() {
 async function init() {
   driver = await makeDriver();
   await driver.exec(SCHEMA);
+  await driver.exec(LOCK_DOWN_DATA_API);
   await seed();
 }
 export const ready = init();

@@ -5,12 +5,16 @@ const CLAUSE_START = /^(\d+\.\d+(?:\.\d+)*|\d+\.)\s+[A-Z("“]/;
 const HEADING = /^[A-Z][A-Z0-9 \-&,'’:/().]{3,80}$/;
 const PAGE_FOOTER = /^--\s*\d+\s+of\s+\d+\s*--$/i;
 
+const MAX_PAGES = 150;
+
 export async function pdfPageTexts(buffer) {
   // unpdf ships a serverless-safe build of pdf.js (no native canvas, no DOM), so it runs on Vercel.
   // Loaded on demand so a problem here can only break PDF reading, not the whole API.
   const { getDocumentProxy } = await import('unpdf');
   const pdf = await getDocumentProxy(new Uint8Array(buffer));
   try {
+    // A hostile or huge PDF would otherwise burn CPU here and tokens at the AI provider.
+    if (pdf.numPages > MAX_PAGES) throw new Error(`This PDF has ${pdf.numPages} pages; the limit is ${MAX_PAGES}.`);
     const pages = [];
     for (let n = 1; n <= pdf.numPages; n++) {
       const content = await (await pdf.getPage(n)).getTextContent();

@@ -9,9 +9,13 @@ const S = (f) => path.join('public', 'samples', f);
 let passed = 0;
 const step = async (name, fn) => { try { await fn(); passed++; console.log(`  ✓ ${name}`); } catch (e) { console.error(`  ✗ ${name}\n    ${e.message}`); process.exitCode = 1; } };
 
-async function api(method, url, { body, form } = {}) {
-  const res = await fetch(BASE + '/api' + url, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: form ?? (body ? JSON.stringify(body) : undefined) });
-  return { status: res.status, data: await res.json().catch(() => null) };
+// Cookie jars act like separate browsers: the default jar is "this browser"; pass { client: {} } for a different one.
+const jar = {};
+async function api(method, url, { body, form, headers = {}, client = jar } = {}) {
+  const cookie = Object.entries(client).map(([k, v]) => `${k}=${v}`).join('; ');
+  const res = await fetch(BASE + '/api' + url, { method, headers: { ...(body ? { 'content-type': 'application/json' } : {}), ...(cookie ? { cookie } : {}), ...headers }, body: form ?? (body ? JSON.stringify(body) : undefined) });
+  for (const c of res.headers.getSetCookie?.() ?? []) { const [kv] = c.split(';'); const i = kv.indexOf('='); client[kv.slice(0, i)] = kv.slice(i + 1); }
+  return { status: res.status, data: await res.json().catch(() => null), headers: res.headers };
 }
 async function upload(file, _uid, q = '') {
   const form = new FormData();
@@ -27,7 +31,7 @@ async function ready(id) {
   throw new Error('timed out waiting for extraction');
 }
 const ackAll = (d) => ({
-  acknowledged_fields: d.fields.filter((f) => f.confidence !== 'high').map((f) => f.field_name),
+  acknowledged_fields: d.fields.map((f) => f.field_name),
   acknowledged_flags: d.flags.map((f) => f.id),
 });
 const confirmBody = (d, vendorName, extra = {}) => ({ title: d.contract.title, contract_type: d.contract.contract_type, vendor: { name: vendorName }, ...ackAll(d), ...extra });
@@ -53,7 +57,7 @@ await step('duplicate upload is rejected unless allowed', async () => {
   assert.equal(r.status, 409); assert.equal(r.data.duplicate_of, ids.msa);
 });
 
-await step('MANDATORY REVIEW: cannot confirm without acknowledging low/medium fields and flags', async () => {
+await step('MANDATORY REVIEW: cannot confirm without acknowledging uncertain fields, expiry/payment and flags', async () => {
   const d = await ready(ids.msa);
   const r = await api('POST', `/contracts/${ids.msa}/confirm`, { body: { title: 'x', contract_type: 'business_class', vendor: { name: 'Nimbus Cloud Solutions Pvt Ltd' } } });
   assert.equal(r.status, 422);
@@ -130,14 +134,17 @@ await step('expiry alerts: dashboard lists contracts inside the window, soonest 
   const titles = d1.expiring.map((e) => e.title);
   assert.ok(titles.includes('Nimbus MSA') && titles.includes('SPCB Consent to Operate – Pune Unit'), titles.join(','));
   assert.deepEqual(d1.expiring.map((e) => e.days_left), [...d1.expiring.map((e) => e.days_left)].sort((a, b) => a - b));
-  assert.equal(d1.expiring.find((e) => e.title === 'Nimbus MSA').window, 30);
+  const msa = d1.expiring.find((e) => e.title === 'Nimbus MSA');
+  assert.equal(msa.window, [7, 15, 30].find((w) => msa.days_left <= w), `window matches days_left (${msa.days_left}); if the sample PDFs have aged, run: npm run samples`);
   await api('POST', '/reminders/run');
   const n1 = (await api('GET', '/dashboard')).data.notifications.length;
   await api('POST', '/reminders/run');
   assert.equal((await api('GET', '/dashboard')).data.notifications.length, n1, 'no duplicate reminders');
   assert.ok(n1 >= 2);
-  await api('PUT', '/settings', { body: { alert_windows: [10] } });
-  assert.ok(!(await api('GET', '/dashboard')).data.expiring.some((e) => e.title === 'Nimbus MSA'), 'window is configurable');
+  if (msa.days_left > 1) {
+    await api('PUT', '/settings', { body: { alert_windows: [msa.days_left - 1] } });
+    assert.ok(!(await api('GET', '/dashboard')).data.expiring.some((e) => e.title === 'Nimbus MSA'), 'window is configurable');
+  }
   await api('PUT', '/settings', { body: { alert_windows: [30, 15, 7] } });
 });
 
@@ -150,6 +157,49 @@ await step('original file is served back', async () => {
   const res = await fetch(`${BASE}/api/contracts/${ids.msa}/file`);
   assert.equal(res.status, 200); assert.equal(res.headers.get('content-type'), 'application/pdf');
   assert.ok((await res.arrayBuffer()).byteLength > 1000);
+});
+
+await step('SECURITY: headers on pages and API; the original-file route is exempt from CSP only', async () => {
+  for (const url of [`${BASE}/`, `${BASE}/api/session`]) {
+    const r = await fetch(url);
+    assert.equal(r.headers.get('x-content-type-options'), 'nosniff', url);
+    assert.equal(r.headers.get('x-frame-options'), 'DENY', url);
+    assert.match(r.headers.get('content-security-policy') || '', /default-src 'self'.*frame-ancestors 'none'/, url);
+  }
+  const f = await fetch(`${BASE}/api/contracts/${ids.msa}/file`);
+  assert.equal(f.headers.get('x-content-type-options'), 'nosniff'); assert.equal(f.headers.get('content-security-policy'), null);
+});
+
+await step('SECURITY: upload content must match its declared type', async () => {
+  const evil = new FormData(); evil.append('file', new Blob(['<html><script>alert(1)</script></html> padding padding'], { type: 'application/pdf' }), 'evil.pdf');
+  assert.equal((await api('POST', '/contracts', { form: evil })).status, 415, 'HTML labelled as PDF');
+  const tiny = new FormData(); tiny.append('file', new Blob(['%PDF-'], { type: 'application/pdf' }), 'tiny.pdf');
+  assert.equal((await api('POST', '/contracts', { form: tiny })).status, 415, 'too short to be a real file');
+});
+
+await step('SECURITY: cross-origin writes are blocked, same-origin allowed', async () => {
+  assert.equal((await api('POST', '/reminders/run', { headers: { origin: 'https://evil.example' } })).status, 403);
+  assert.equal((await api('POST', '/reminders/run', { headers: { origin: 'null' } })).status, 403);
+  assert.equal((await api('POST', '/reminders/run', { headers: { origin: BASE } })).status, 200);
+});
+
+await step('SECURITY: chat history is private to a browser session', async () => {
+  const other = {};
+  assert.deepEqual((await api('GET', `/contracts/${ids.msa}/chat`, { client: other })).data, [], 'a different browser sees none of it');
+  await api('DELETE', `/contracts/${ids.msa}/chat`, { client: other });
+  assert.ok((await api('GET', `/contracts/${ids.msa}/chat`)).data.length >= 4, 'clearing in another browser does not wipe this one');
+});
+
+await step('SECURITY: expiry date and payment terms always need an explicit check, even when marked high confidence', async () => {
+  const r = await upload('nimbus-hosting-order-form-2024.pdf', 0, '?allow_duplicate=1');
+  const d = await ready(r.data.id);
+  const high = d.fields.filter((f) => f.confidence === 'high').map((f) => f.field_name);
+  assert.ok(high.includes('expiration_date') && high.includes('payment_terms'), `fixture has both at high confidence (${high})`);
+  const body = { title: d.contract.title, contract_type: d.contract.contract_type, vendor: { name: 'Nimbus Cloud Solutions Pvt Ltd' },
+    acknowledged_fields: d.fields.filter((f) => f.confidence !== 'high').map((f) => f.field_name), acknowledged_flags: d.flags.map((f) => f.id) };
+  const refused = await api('POST', `/contracts/${r.data.id}/confirm`, { body });
+  assert.equal(refused.status, 422); assert.deepEqual([...refused.data.missing_fields].sort(), ['expiration_date', 'payment_terms']);
+  assert.equal((await api('DELETE', `/contracts/${r.data.id}`)).status, 200);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

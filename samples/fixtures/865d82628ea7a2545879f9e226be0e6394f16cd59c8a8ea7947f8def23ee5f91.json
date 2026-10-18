@@ -23,7 +23,7 @@
       "rationale": "Both parties named in the preamble."
     },
     "effective_date": {
-      "value": "2025-10-10",
+      "value": "2025-11-02",
       "confidence": "high",
       "refs": [
         "P1.2"
@@ -31,7 +31,7 @@
       "rationale": "Stated as the Effective Date."
     },
     "expiration_date": {
-      "value": "2026-10-10",
+      "value": "2026-11-02",
       "confidence": "medium",
       "refs": [
         "P2.2"

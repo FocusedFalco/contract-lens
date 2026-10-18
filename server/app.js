@@ -4,57 +4,102 @@ import express from 'express';
 import multer from 'multer';
 import { q, one, tx, now, j, unj, getSetting, setSetting, ready } from './db.js';
 import { ROOT, MODE, MODEL, PROVIDER, MAX_UPLOAD_BYTES } from './config.js';
-import { extractContract, sha256, isSupportedMime, FIELD_NAMES } from './extract.js';
+import { extractContract, sha256, isSupportedMime, matchesMime, FIELD_NAMES } from './extract.js';
 import { answerQuestion } from './chat.js';
 import { matchVendors, createVendor, addAlias, AUTO_THRESHOLD } from './vendors.js';
 import { expiringContracts, runReminders, refreshStatuses, daysUntil, alertWindows } from './alerts.js';
 import { refLabel } from './pdf.js';
 import { wrap, httpError } from './util.js';
+import { limit, LIMITS } from './ratelimit.js';
 
 const app = express();
-app.set('trust proxy', true);
+// Exactly one trusted proxy hop (Vercel's edge): req.ip is the real client and a client-sent X-Forwarded-For can't spoof it.
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+
+const GATE = process.env.ACCESS_PASSWORD || '';
+const PUBLIC_HOST = !!process.env.VERCEL || process.env.NODE_ENV === 'production';
+if (GATE && GATE.length < 12) console.warn('ACCESS_PASSWORD is shorter than 12 characters. Use a long random value.');
+
+// ------------------------------------------------------------------ security headers
+// style-src needs 'unsafe-inline' because the UI uses inline style attributes; there are no inline scripts.
+const CSP = [
+  "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", 'font-src https://fonts.gstatic.com',
+  "img-src 'self' data:", "connect-src 'self'", "object-src 'none'", "base-uri 'none'", "form-action 'self'", "frame-ancestors 'none'",
+].join('; ');
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  // The original-file route is exempt from CSP: a strict policy can stop browsers' built-in PDF viewers from rendering.
+  if (!/^\/api\/contracts\/\d+\/file$/.test(req.path)) res.setHeader('Content-Security-Policy', CSP);
+  next();
+});
+
+// Fail closed: on a public host an unset access code must never mean "everything is open".
+if (PUBLIC_HOST && !GATE) {
+  app.use('/api', (req, res) => res.status(503).json({ error: 'Server not configured: set ACCESS_PASSWORD (12+ random characters) in the environment.' }));
+}
+
 app.use(express.json({ limit: '2mb' }));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD_BYTES } });
 
+// Cross-site request guard (defense in depth on top of SameSite cookies): a browser request that changes data must come from our own origin.
+app.use('/api', (req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  let same = false;
+  try { same = new URL(origin).host === req.headers.host; } catch { /* "null" or malformed origin */ }
+  same ? next() : next(httpError(403, 'Cross-origin request blocked.'));
+});
+
 // Make sure the database is reachable (and the schema exists) before any API work.
 app.use('/api', async (req, res, next) => {
-  try { await ready; next(); } catch (e) { next(httpError(503, `Database connection failed: ${e.message}`)); }
+  try { await ready; next(); } catch (e) { console.error('database unavailable:', e.message); next(httpError(503, 'Database unavailable. Please try again shortly.')); }
 });
 
 // ------------------------------------------------------------------ optional access code
-// There are no accounts. If ACCESS_PASSWORD is set (do this on any public deployment), the API
-// refuses requests until the visitor enters that code once (stored as an HttpOnly cookie).
-const GATE = process.env.ACCESS_PASSWORD || '';
-const gateToken = () => crypto.createHmac('sha256', GATE).update('contractlens-access').digest('hex');
+// There are no accounts. If ACCESS_PASSWORD is set (mandatory on a public host, see the guard above), the API refuses
+// requests until the visitor enters that code once. The browser then keeps a signed cookie that expires after 7 days.
+// Set SESSION_SECRET (32+ random bytes) so the cookie can never be used to brute-force the access code offline.
+const SESSION_SECRET = process.env.SESSION_SECRET || GATE;
+const sign = (s) => crypto.createHmac('sha256', SESSION_SECRET).update(s).digest('base64url');
 const cookieOf = (req, name) => new RegExp(`(?:^|;\\s*)${name}=([^;]+)`).exec(req.headers.cookie || '')?.[1] || '';
-const safeEq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
-const unlocked = (req) => !GATE || safeEq(cookieOf(req, 'cl_gate'), gateToken());
-const tries = new Map();
+// Constant-time comparison that also hides the length (both sides are hashed with a throwaway key first).
+const safeEq = (a, b) => { const k = crypto.randomBytes(32); const h = (s) => crypto.createHmac('sha256', k).update(String(s)).digest(); return crypto.timingSafeEqual(h(a), h(b)); };
+const secureFlag = (req) => (req.secure ? '; Secure' : '');
+const issueToken = () => { const exp = Date.now() + 7 * 864e5; return `${exp}.${sign(`gate:${exp}`)}`; };
+const validToken = (t) => { const [exp, sig] = String(t).split('.'); return Number(exp) > Date.now() && !!sig && safeEq(sig, sign(`gate:${exp}`)); };
+const unlocked = (req) => !GATE || validToken(cookieOf(req, 'cl_gate'));
 
 app.get('/api/gate', (req, res) => res.json({ required: !!GATE, unlocked: unlocked(req) }));
-app.post('/api/unlock', (req, res) => {
+app.post('/api/unlock', wrap(async (req, res) => {
   if (!GATE) return res.json({ ok: true });
-  const rec = tries.get(req.ip) || { n: 0, reset: Date.now() + 10 * 60000 };
-  if (rec.reset < Date.now()) { rec.n = 0; rec.reset = Date.now() + 10 * 60000; }
-  if (++rec.n > 10) throw httpError(429, 'Too many attempts. Wait a few minutes and try again.');
-  tries.set(req.ip, rec);
+  await limit(`unlock:${req.ip}`, LIMITS.unlock.max, LIMITS.unlock.windowMs); // shared across serverless instances
   if (!safeEq(req.body?.code ?? '', GATE)) throw httpError(401, 'Wrong access code.');
-  tries.delete(req.ip);
-  const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `cl_gate=${gateToken()}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secure}`);
+  res.append('Set-Cookie', `cl_gate=${issueToken()}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800${secureFlag(req)}`);
   res.json({ ok: true });
-});
+}));
 // "Sign out": clears the access-code cookie so this browser is asked for the code again (useful on a shared computer).
 app.post('/api/lock', (req, res) => {
-  const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `cl_gate=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure}`);
+  res.append('Set-Cookie', `cl_gate=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secureFlag(req)}`);
   res.json({ ok: true });
 });
 app.use('/api', (req, res, next) => (unlocked(req) ? next() : next(httpError(401, 'Access code required.', { gate: true }))));
 
 // ------------------------------------------------------------------ single open workspace
 const WORKSPACE = { user: { id: 1, name: 'You' }, ownerKey: 'workspace:1', ownerName: 'the person who uploaded this contract (name not provided)' };
-app.use('/api', (req, res, next) => { req.ctx = WORKSPACE; next(); });
+// Chat history belongs to a browser session (random cookie), so people sharing the workspace can't read or wipe each other's questions.
+app.use('/api', (req, res, next) => {
+  let sid = cookieOf(req, 'cl_sid');
+  if (!/^[A-Za-z0-9_-]{22}$/.test(sid)) {
+    sid = crypto.randomBytes(16).toString('base64url');
+    res.append('Set-Cookie', `cl_sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=31536000${secureFlag(req)}`);
+  }
+  req.ctx = { ...WORKSPACE, sid };
+  next();
+});
 
 const vendorMode = (ctx) => getSetting(`vendor_mode:user:${ctx.user.id}`, 'manual');
 
@@ -146,17 +191,21 @@ async function processContract(id, { buffer, mime, fileName, ownerName }) {
     });
   } catch (e) {
     console.error(`extraction failed for contract ${id}:`, e.message);
-    await q("UPDATE contract SET status = 'failed', error = ? WHERE id = ?", [e.message, id]);
+    await q("UPDATE contract SET status = 'failed', error = ? WHERE id = ?", [String(e.message).slice(0, 300), id]);
   }
 }
 
-app.post('/api/contracts', upload.single('file'), wrap(async (req, res) => {
+// Each upload triggers paid AI calls, so it is rate limited per client, and before multer buffers the body in memory.
+const uploadGuard = wrap(async (req, res, next) => { await limit(`upload:${req.ip}`, LIMITS.upload.max, LIMITS.upload.windowMs); next(); });
+app.post('/api/contracts', uploadGuard, upload.single('file'), wrap(async (req, res) => {
   const f = req.file;
   if (!f) throw httpError(400, 'Attach a file in the "file" field.');
   f.originalname = Buffer.from(f.originalname, 'latin1').toString('utf8'); // multer hands filenames over as latin1 (an em dash would arrive garbled)
   const ext = path.extname(f.originalname).toLowerCase();
   const mime = f.mimetype !== 'application/octet-stream' ? f.mimetype : ({ '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' })[ext];
   if (!isSupportedMime(mime)) throw httpError(415, 'Unsupported file type. Upload a PDF, PNG, JPG or WebP.');
+  // The declared type is client-controlled: confirm the bytes really are that kind of file.
+  if (!matchesMime(f.buffer, mime)) throw httpError(415, 'The file content does not match its type. Is it really a PDF or image?');
   const sha = sha256(f.buffer);
   const dupe = await one("SELECT id, title FROM contract WHERE owner_key = ? AND file_sha = ? AND status != 'failed'", [req.ctx.ownerKey, sha]);
   if (dupe && !req.query.allow_duplicate) throw httpError(409, `This exact file is already stored as "${dupe.title}".`, { duplicate_of: dupe.id });
@@ -213,10 +262,12 @@ app.delete('/api/contracts/:id', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
+const REVIEW_ALWAYS = new Set(['expiration_date', 'payment_terms']);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const sameJson = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 function validateFieldValue(name, v) {
+  if (JSON.stringify(v ?? null).length > 20000) throw httpError(422, `${name.replace(/_/g, ' ')} is too large.`);
   if (name === 'effective_date' || name === 'expiration_date') {
     if (v !== null && !(typeof v === 'string' && DATE_RE.test(v) && !Number.isNaN(Date.parse(v)))) throw httpError(422, `${name.replace('_', ' ')} must be a date (YYYY-MM-DD) or empty.`);
   } else if (name === 'payment_terms') {
@@ -234,7 +285,7 @@ app.post('/api/contracts/:id/confirm', wrap(async (req, res) => {
   const b = req.body || {};
   const firstReview = c.status === 'pending_review';
 
-  const title = String(b.title || '').trim();
+  const title = String(b.title || '').trim().slice(0, 200);
   if (!title) throw httpError(422, 'Give the contract a name.');
   if (!['business_class', 'regulatory_class'].includes(b.contract_type)) throw httpError(422, 'Choose a contract type.');
 
@@ -250,7 +301,10 @@ app.post('/api/contracts/:id/confirm', wrap(async (req, res) => {
     const ackF = new Set(b.acknowledged_fields || []);
     const ackFl = new Set((b.acknowledged_flags || []).map(Number));
     const changed = (f) => f.field_name in edits && !sameJson(edits[f.field_name], f.extracted_value);
-    const missingFields = fields.filter((f) => f.confidence !== 'high' && !ackF.has(f.field_name) && !changed(f)).map((f) => f.field_name);
+    // Confidence is self-reported by the model, so a manipulated or mistaken "high" must not skip review for the two
+    // fields with real-world consequences (keep this rule in sync with needsAck() in public/app.js).
+    const needsAck = (f) => f.confidence !== 'high' || REVIEW_ALWAYS.has(f.field_name);
+    const missingFields = fields.filter((f) => needsAck(f) && !ackF.has(f.field_name) && !changed(f)).map((f) => f.field_name);
     const missingFlags = (await q('SELECT id FROM clause_flag WHERE contract_id = ?', [c.id])).map((f) => f.id).filter((id) => !ackFl.has(id));
     if (missingFields.length || missingFlags.length) {
       throw httpError(422, 'Review every low/medium-confidence field and every flagged clause before confirming.', { missing_fields: missingFields, missing_flags: missingFlags });
@@ -268,9 +322,10 @@ app.post('/api/contracts/:id/confirm', wrap(async (req, res) => {
   };
   if (v.id) {
     const row = await vendorRow(v.id);
-    plan = { id: row.id, alias: v.name && v.name.trim() !== row.canonical_name ? v.name : null };
+    const alias = String(v.name || '').trim().slice(0, 200);
+    plan = { id: row.id, alias: alias && alias !== row.canonical_name ? alias : null };
   } else {
-    const name = String(v.name || '').trim();
+    const name = String(v.name || '').trim().slice(0, 200);
     if (!name) throw httpError(422, 'Choose or enter a vendor.');
     const existing = await one('SELECT id FROM vendor WHERE owner_key = ? AND lower(canonical_name) = lower(?)', [ownerKey, name]);
     const candidates = await matchVendors(ownerKey, name);
@@ -298,7 +353,7 @@ app.post('/api/contracts/:id/confirm', wrap(async (req, res) => {
     const status = expiry && daysUntil(expiry) < 0 ? 'expired' : 'active';
     await t.q(`UPDATE contract SET title = ?, contract_type = ?, vendor_id = ?, summary_text = ?, effective_date = ?, expiration_date = ?, status = ?,
       reviewed_by = COALESCE(?::int, reviewed_by), reviewed_at = COALESCE(?::text, reviewed_at) WHERE id = ?`,
-    [title, b.contract_type, vid, typeof b.summary_text === 'string' ? b.summary_text : c.summary_text, val('effective_date'), expiry, status,
+    [title, b.contract_type, vid, typeof b.summary_text === 'string' ? b.summary_text.slice(0, 5000) : c.summary_text, val('effective_date'), expiry, status,
       firstReview ? req.ctx.user.id : null, firstReview ? now() : null, c.id]);
     for (const [id, resolved] of Object.entries(b.flag_resolved || {})) await t.q('UPDATE clause_flag SET resolved = ? WHERE id = ? AND contract_id = ?', [resolved ? 1 : 0, Number(id), c.id]);
     return vid;
@@ -314,35 +369,38 @@ const unpackSources = (raw) => { const v = unj(raw); return Array.isArray(v) ? {
 
 app.get('/api/contracts/:id/chat', wrap(async (req, res) => {
   const c = await ownContract(req, req.params.id);
-  const rows = await q('SELECT * FROM chat_message WHERE contract_id = ? AND user_id = ? ORDER BY id', [c.id, req.ctx.user.id]);
+  const rows = await q('SELECT * FROM chat_message WHERE contract_id = ? AND session_id = ? ORDER BY id', [c.id, req.ctx.sid]);
   res.json(rows.map((m) => ({ id: m.id, role: m.role, content: m.content, ...unpackSources(m.cited_sources), confidence: m.confidence, created_at: m.created_at })));
 }));
 
 app.post('/api/contracts/:id/chat', wrap(async (req, res) => {
+  await limit(`chat:${req.ip}`, LIMITS.chat.max, LIMITS.chat.windowMs); // every answer is a paid AI call
   const c = await ownContract(req, req.params.id);
   if (['processing', 'failed'].includes(c.status)) throw httpError(409, 'This contract has no readable text to ask about.');
   const question = String(req.body?.question || '').trim();
   if (!question) throw httpError(400, 'Ask a question.');
   if (question.length > 2000) throw httpError(400, 'Question is too long (2000 characters max).');
   const paragraphs = await loadParagraphs(c.id);
-  const history = await q('SELECT role, content FROM chat_message WHERE contract_id = ? AND user_id = ? ORDER BY id', [c.id, req.ctx.user.id]);
+  // Only the last 6 messages of THIS browser session are ever replayed to the model (newest first, then put back in order).
+  const history = (await q('SELECT role, content FROM chat_message WHERE contract_id = ? AND session_id = ? ORDER BY id DESC LIMIT 6', [c.id, req.ctx.sid])).reverse();
   const fields = (await loadFields(c.id)).map((f) => ({ field_name: f.field_name, value: f.value, confidence: f.confidence, corrected: f.was_corrected, source_refs: f.source_refs, rationale: f.rationale }));
   const flags = await loadFlags(c.id, paragraphs);
   let out;
   try {
     out = await answerQuestion({ question, paragraphs, fields, flags, history });
   } catch (e) {
-    throw httpError(502, `Could not get an answer: ${e.message}`);
+    console.error('chat answer failed:', e.message); // the upstream error text stays in the server log, not in the response
+    throw httpError(502, e.status === 429 ? 'The AI service is busy right now. Please try again in a minute.' : 'The AI service could not answer right now. Please try again.');
   }
-  const ins = 'INSERT INTO chat_message (contract_id, user_id, role, content, cited_sources, confidence, created_at) VALUES (?,?,?,?,?,?,?)';
-  await q(ins, [c.id, req.ctx.user.id, 'user', question, '[]', null, now()]);
-  await q(ins, [c.id, req.ctx.user.id, 'assistant', out.answer, j({ citations: out.citations, web_citations: out.web_citations }), out.confidence, now()]);
+  const ins = 'INSERT INTO chat_message (contract_id, user_id, role, content, cited_sources, confidence, created_at, session_id) VALUES (?,?,?,?,?,?,?,?)';
+  await q(ins, [c.id, req.ctx.user.id, 'user', question, '[]', null, now(), req.ctx.sid]);
+  await q(ins, [c.id, req.ctx.user.id, 'assistant', out.answer, j({ citations: out.citations, web_citations: out.web_citations }), out.confidence, now(), req.ctx.sid]);
   res.json({ role: 'assistant', content: out.answer, citations: out.citations, web_citations: out.web_citations, confidence: out.confidence, mode: out.mode });
 }));
 
 app.delete('/api/contracts/:id/chat', wrap(async (req, res) => {
   const c = await ownContract(req, req.params.id);
-  await q('DELETE FROM chat_message WHERE contract_id = ? AND user_id = ?', [c.id, req.ctx.user.id]);
+  await q('DELETE FROM chat_message WHERE contract_id = ? AND session_id = ?', [c.id, req.ctx.sid]);
   res.json({ ok: true });
 }));
 
@@ -375,6 +433,31 @@ app.get('/api/vendors/:id', wrap(async (req, res) => {
   });
 }));
 
+app.patch('/api/vendors/:id', wrap(async (req, res) => {
+  const v = await one('SELECT id, canonical_name FROM vendor WHERE id = ? AND owner_key = ?', [Number(req.params.id) || 0, req.ctx.ownerKey]);
+  if (!v) throw httpError(404, 'Vendor not found');
+  const name = typeof req.body?.name === 'string' ? req.body.name.replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 200) : '';
+  if (!name) throw httpError(422, 'Enter a contractor name.');
+  const dup = await one('SELECT id FROM vendor WHERE owner_key = ? AND lower(canonical_name) = lower(?) AND id <> ?', [req.ctx.ownerKey, name, v.id]);
+  if (dup) throw httpError(409, 'Another contractor already has that name.');
+  await tx(async (t) => {
+    await t.q('UPDATE vendor SET canonical_name = ? WHERE id = ?', [name, v.id]);
+    await addAlias(v.id, v.canonical_name, t); // keep the old spelling so future matches still link here
+  });
+  res.json({ ok: true, canonical_name: name });
+}));
+
+app.delete('/api/vendors/:id', wrap(async (req, res) => {
+  const v = await one('SELECT id FROM vendor WHERE id = ? AND owner_key = ?', [Number(req.params.id) || 0, req.ctx.ownerKey]);
+  if (!v) throw httpError(404, 'Vendor not found');
+  const removed = await tx(async (t) => {
+    const gone = await t.q('DELETE FROM contract WHERE vendor_id = ? AND owner_key = ? RETURNING id', [v.id, req.ctx.ownerKey]);
+    await t.q('DELETE FROM vendor WHERE id = ?', [v.id]);
+    return gone.length;
+  });
+  res.json({ ok: true, contracts_removed: removed });
+}));
+
 // ------------------------------------------------------------------ dashboard / reminders
 app.get('/api/dashboard', wrap(async (req, res) => {
   const { ownerKey } = req.ctx;
@@ -390,6 +473,7 @@ app.get('/api/dashboard', wrap(async (req, res) => {
 }));
 
 app.post('/api/reminders/run', wrap(async (req, res) => {
+  await limit(`reminders:${req.ip}`, 30, 3600 * 1000);
   const created = await runReminders();
   res.json({ created: created.filter((c) => c.ownerKey === req.ctx.ownerKey).length });
 }));
@@ -406,10 +490,15 @@ app.post('/api/notifications/read-all', wrap(async (req, res) => {
 app.use(express.static(path.join(ROOT, 'public')));
 
 app.use((err, req, res, _next) => {
-  if (err instanceof multer.MulterError) return res.status(413).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'File is too large (25 MB max).' : err.message });
+  if (err instanceof multer.MulterError) return res.status(413).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'File is too large (25 MB max).' : 'Upload rejected.' });
   const status = err.status || 500;
-  if (status >= 500) console.error(err);
-  res.status(status).json({ error: err.message, ...(err.extra || {}) });
+  if (status === 500) {
+    // Unexpected failure: the details (SQL, hosts, library messages) go to the server log only; the client gets a reference.
+    const ref = crypto.randomUUID().slice(0, 8);
+    console.error(`[${ref}] ${err.message}`);
+    return res.status(500).json({ error: `Something went wrong on our side (ref ${ref}).` });
+  }
+  res.status(status).json({ error: err.message, ...(err.extra || {}) }); // 4xx/502/503 messages are written by us, never raw upstream text
 });
 
 export default app;

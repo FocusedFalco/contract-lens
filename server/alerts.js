@@ -58,7 +58,7 @@ export async function runReminders() {
       const ins = await q(`INSERT INTO notification (owner_key, contract_id, kind, window_days, expiration_date, message, created_at)
         VALUES (?, ?, 'expiry', ?, ?, ?, ?) ON CONFLICT (contract_id, kind, window_days, expiration_date) DO NOTHING RETURNING id`,
       [ownerKey, c.id, c.window, c.expiration_date, message, now()]);
-      return ins.length ? { ownerKey, message, window: c.window } : null;
+      return ins.length ? { ownerKey, contractId: c.id, message, window: c.window } : null;
     }));
     return inserted.filter(Boolean);
   }));
@@ -68,9 +68,10 @@ export async function runReminders() {
 }
 
 async function deliver(n) {
-  console.log(`[reminder] EXPIRY-${n.window}d ${n.message}`);
+  // Logs get contract ids only: titles and vendor names can be personal data, and logs are retained and widely readable.
+  console.log(`[reminder] contract=${n.contractId} window=${n.window}d`);
   if (!process.env.VERCEL) { // no writable disk on serverless hosts
-    try { fs.appendFileSync(path.join(DATA_DIR, 'outbox.log'), `${now()}\t${n.ownerKey}\tEXPIRY-${n.window}d\t${n.message}\n`); } catch { /* best effort */ }
+    try { fs.appendFileSync(path.join(DATA_DIR, 'outbox.log'), `${now()}\t${n.ownerKey}\tEXPIRY-${n.window}d\tcontract=${n.contractId}\n`); } catch { /* best effort */ }
   }
   const url = process.env.ALERT_WEBHOOK_URL;
   if (url) {
