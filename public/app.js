@@ -319,10 +319,18 @@ async function uploadFiles(files) {
 async function pageVendors() {
   app.innerHTML = `<div class="page-head"><h1>Vendors</h1></div>${skeleton('Loading vendors…')}`;
   const vs = await api('GET', '/vendors');
+  const rows = (list) => list.length ? `<table class="responsive"><thead><tr><th>Vendor</th><th>Also known as</th><th>Contracts</th><th>Active</th><th>Next expiry</th></tr></thead><tbody>
+      ${list.map((v) => `<tr><td><a href="#/vendor/${v.id}"><strong>${esc(v.canonical_name)}</strong></a></td><td class="small muted">${esc(v.aliases.join(', ')) || '—'}</td><td>${v.contract_count}</td><td>${v.active_count || 0}</td><td>${v.next_expiry ? fmtDate(v.next_expiry) + ' · ' + daysChip(v.next_expiry_days) : '—'}</td></tr>`).join('')}</tbody></table>` : `<div class="empty">${vs.length ? 'No vendor matches that search.' : 'No vendors yet. They are created when you confirm a contract.'}</div>`;
   app.innerHTML = `<div class="page-head"><div><h1>Vendors</h1><div class="muted">Every counterparty and their contract history.</div></div></div>
-    <div class="card">${vs.length ? `<table class="responsive"><thead><tr><th>Vendor</th><th>Also known as</th><th>Contracts</th><th>Active</th><th>Next expiry</th></tr></thead><tbody>
-      ${vs.map((v) => `<tr><td><a href="#/vendor/${v.id}"><strong>${esc(v.canonical_name)}</strong></a></td><td class="small muted">${esc(v.aliases.join(', ')) || '—'}</td><td>${v.contract_count}</td><td>${v.active_count || 0}</td><td>${v.next_expiry ? fmtDate(v.next_expiry) + ' · ' + daysChip(v.next_expiry_days) : '—'}</td></tr>`).join('')}</tbody></table>` : '<div class="empty">No vendors yet. They are created when you confirm a contract.</div>'}</div>`;
+    ${vs.length ? '<div class="row wrap" style="margin-bottom:12px"><input id="vq" placeholder="Search vendors…" style="max-width:280px" aria-label="Search vendors"></div>' : ''}
+    <div class="card" id="vlist">${rows(vs)}</div>`;
+  const box = $('#vq');
+  if (box) box.addEventListener('input', () => { // case-insensitive, matches the name or any alias
+    const needle = box.value.trim().toLowerCase();
+    $('#vlist').innerHTML = rows(vs.filter((v) => `${v.canonical_name} ${v.aliases.join(' ')}`.toLowerCase().includes(needle)));
+  });
 }
+
 async function pageVendor(id) {
   app.innerHTML = `<div class="page-head"><a class="small" href="#/vendors">← Vendors</a></div>${skeleton('Loading vendor…')}`;
   const v = await api('GET', '/vendors/' + id);
@@ -423,6 +431,7 @@ function drawContract() {
         <div><label class="small muted" for="f-title">Contract name</label><input id="f-title" data-bind="title" value="${esc(ed.title)}" ${edit ? '' : 'disabled'}></div>
         <div><label class="small muted" for="f-type">Contract type</label><select id="f-type" data-bind="type" ${edit ? '' : 'disabled'}><option value="business_class" ${ed.type === 'business_class' ? 'selected' : ''}>Business (bills, land, loans, supply)</option><option value="regulatory_class" ${ed.type === 'regulatory_class' ? 'selected' : ''}>Regulatory (government, licences, insurance)</option></select></div></div>
         <div><label class="small muted" for="f-vendor">Vendor <span class="tiny">· ${d.vendor_mode === 'automatic' ? 'automatic' : 'manual'} vendor chain (change in Settings)</span></label>
+          ${edit && state.vendors.length ? `<select id="f-vendor-pick" data-act="vendor-select" aria-label="Choose an existing vendor" style="margin-bottom:6px"><option value="">Choose an existing vendor…</option>${state.vendors.map((v) => `<option value="${v.id}" ${ed.vendor.id === v.id ? 'selected' : ''}>${esc(v.canonical_name)}</option>`).join('')}</select>` : ''}
           <input id="f-vendor" data-bind="vendor" list="vendor-list" value="${esc(ed.vendor.name)}" ${edit ? '' : 'disabled'} placeholder="Who is the other party?">
           <datalist id="vendor-list">${state.vendors.map((v) => `<option value="${esc(v.canonical_name)}">`).join('')}</datalist>
           ${ed.vendor.id ? `<div class="tiny" style="margin-top:4px"><span class="badge high">✓ linked to existing vendor</span></div>` : ''}
@@ -602,7 +611,13 @@ function onEdit(e) {
   updateProgress();
 }
 document.addEventListener('input', onEdit);
-document.addEventListener('change', (e) => { if (e.target.dataset?.field === 'recurrence') onEdit(e); });
+document.addEventListener('change', (e) => {
+  if (e.target.dataset?.field === 'recurrence') onEdit(e);
+  if (e.target.dataset?.act === 'vendor-select' && e.target.value) {
+    const v = state.vendors.find((x) => x.id === Number(e.target.value));
+    if (v) { ed.vendor = { id: v.id, name: v.canonical_name }; ed.autoNote = ''; drawContract(); }
+  }
+});
 window.addEventListener('hashchange', route);
 
 async function loadSession() {
