@@ -447,6 +447,21 @@ app.patch('/api/vendors/:id', wrap(async (req, res) => {
   res.json({ ok: true, canonical_name: name });
 }));
 
+app.post('/api/vendors/:id/merge', wrap(async (req, res) => {
+  const { ownerKey } = req.ctx;
+  const from = await one('SELECT id, canonical_name, aliases FROM vendor WHERE id = ? AND owner_key = ?', [Number(req.params.id) || 0, ownerKey]);
+  const into = await one('SELECT id, canonical_name, aliases FROM vendor WHERE id = ? AND owner_key = ?', [Number(req.body?.into) || 0, ownerKey]);
+  if (!from || !into) throw httpError(404, 'Vendor not found');
+  if (from.id === into.id) throw httpError(422, 'Choose a different vendor to merge into.');
+  await tx(async (t) => {
+    await t.q('UPDATE contract SET vendor_id = ? WHERE vendor_id = ? AND owner_key = ?', [into.id, from.id, ownerKey]);
+    const names = [from.canonical_name, ...(unj(from.aliases) || [])];
+    for (const n of names) await addAlias(into.id, n, t); // every spelling now resolves to the surviving vendor
+    await t.q('DELETE FROM vendor WHERE id = ?', [from.id]);
+  });
+  res.json({ ok: true, into: into.id });
+}));
+
 app.delete('/api/vendors/:id', wrap(async (req, res) => {
   const v = await one('SELECT id FROM vendor WHERE id = ? AND owner_key = ?', [Number(req.params.id) || 0, req.ctx.ownerKey]);
   if (!v) throw httpError(404, 'Vendor not found');

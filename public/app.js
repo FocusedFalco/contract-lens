@@ -431,7 +431,7 @@ function drawContract() {
         <div><label class="small muted" for="f-title">Contract name</label><input id="f-title" data-bind="title" value="${esc(ed.title)}" ${edit ? '' : 'disabled'}></div>
         <div><label class="small muted" for="f-type">Contract type</label><select id="f-type" data-bind="type" ${edit ? '' : 'disabled'}><option value="business_class" ${ed.type === 'business_class' ? 'selected' : ''}>Business (bills, land, loans, supply)</option><option value="regulatory_class" ${ed.type === 'regulatory_class' ? 'selected' : ''}>Regulatory (government, licences, insurance)</option></select></div></div>
         <div><label class="small muted" for="f-vendor">Vendor <span class="tiny">· ${d.vendor_mode === 'automatic' ? 'automatic' : 'manual'} vendor chain (change in Settings)</span></label>
-          ${edit && state.vendors.length ? `<select id="f-vendor-pick" data-act="vendor-select" aria-label="Choose an existing vendor" style="margin-bottom:6px"><option value="">Choose an existing vendor…</option>${state.vendors.map((v) => `<option value="${v.id}" ${ed.vendor.id === v.id ? 'selected' : ''}>${esc(v.canonical_name)}</option>`).join('')}</select>` : ''}
+          ${state.vendors.length ? `<select id="f-vendor-pick" data-act="vendor-select" ${edit ? '' : 'disabled'} aria-label="Choose an existing vendor" style="margin-bottom:6px"><option value="">Choose an existing vendor…</option>${state.vendors.map((v) => `<option value="${v.id}" ${ed.vendor.id === v.id ? 'selected' : ''}>${esc(v.canonical_name)}</option>`).join('')}</select>` : ''}
           <input id="f-vendor" data-bind="vendor" list="vendor-list" value="${esc(ed.vendor.name)}" ${edit ? '' : 'disabled'} placeholder="Who is the other party?">
           <datalist id="vendor-list">${state.vendors.map((v) => `<option value="${esc(v.canonical_name)}">`).join('')}</datalist>
           ${ed.vendor.id ? `<div class="tiny" style="margin-top:4px"><span class="badge high">✓ linked to existing vendor</span></div>` : ''}
@@ -569,7 +569,19 @@ document.addEventListener('click', async (e) => {
       await api('PUT', '/settings', body); await loadSession(); closeModal(); toast('Settings saved'); route();
     }
     else if (a === 'sample') { t.disabled = true; const blob = await (await fetch('/samples/' + t.dataset.file)).blob(); await uploadFiles([new File([blob], t.dataset.file, { type: 'application/pdf' })]); t.disabled = false; }
-    else if (a === 'rename-vendor') { const n = prompt('Contractor name', t.dataset.name); if (n && n.trim() && n.trim() !== t.dataset.name) { await api('PATCH', '/vendors/' + t.dataset.id, { name: n.trim() }); toast('Renamed'); route(); } }
+    else if (a === 'rename-vendor') {
+      const others = (await api('GET', '/vendors')).filter((x) => String(x.id) !== t.dataset.id);
+      modal(`<h2>Rename or merge contractor</h2>
+        <label class="small muted" for="rv-name">Contractor name</label><input id="rv-name" value="${esc(t.dataset.name)}">
+        ${others.length ? `<label class="small muted" for="rv-into" style="display:block;margin-top:12px">Or merge into an existing vendor</label><select id="rv-into"><option value="">Choose an existing vendor…</option>${others.map((x) => `<option value="${x.id}">${esc(x.canonical_name)}</option>`).join('')}</select><div class="tiny muted" style="margin-top:4px">Merging moves all contracts to the chosen vendor and keeps this name as an alternate spelling.</div>` : ''}
+        <div class="row" style="margin-top:16px;justify-content:flex-end"><button data-act="close-modal">Cancel</button><button class="primary" data-act="save-vendor" data-id="${t.dataset.id}" data-name="${esc(t.dataset.name)}">Save</button></div>`);
+    }
+    else if (a === 'save-vendor') {
+      const into = $('#rv-into')?.value, n = $('#rv-name').value.trim();
+      if (into) { await api('POST', `/vendors/${t.dataset.id}/merge`, { into: Number(into) }); closeModal(); toast('Merged'); location.hash = '#/vendor/' + into; }
+      else if (n && n !== t.dataset.name) { await api('PATCH', '/vendors/' + t.dataset.id, { name: n }); closeModal(); toast('Renamed'); route(); }
+      else closeModal();
+    }
     else if (a === 'delete-vendor') { if (confirm(`Remove "${t.dataset.name}" and all ${t.dataset.n} confirmed contract(s) under it, plus any drafts? This cannot be undone.`)) { const r = await api('DELETE', '/vendors/' + t.dataset.id); toast(`Removed contractor and ${r.contracts_removed} contract(s)`); location.hash = '#/vendors'; } }
     else if (a === 'delete') { if (confirm('Delete this contract and its file? This cannot be undone.')) { await api('DELETE', '/contracts/' + t.dataset.id); toast('Deleted'); location.hash = '#/contracts'; } }
     // contract page
